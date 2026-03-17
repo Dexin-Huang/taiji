@@ -1,7 +1,7 @@
 """
 Shared taiji yin/yang cycle.
 
-Each experiment owns only:
+Each unit owns only:
 - prompt.md
 - yang.py
 - yin.py
@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .schema import ROOT, append_ndjson, iso_timestamp_now, resolve_env_root, write_json
+from .schema import ROOT, append_ndjson, iso_timestamp_now, resolve_unit_root, write_json
 
 Scalar = str | int | float | bool | None
 SHARED_PROMPTS_ROOT = ROOT / "prompts" / "yin_yang"
@@ -50,30 +50,6 @@ class DualLoopPaths:
     ideas_path: Path
     frontier_path: Path
 
-    @property
-    def env_root(self) -> Path:
-        return self.unit_root
-
-    @property
-    def rubric_path(self) -> Path:
-        return self.law_path
-
-    @property
-    def builder_path(self) -> Path:
-        return self.yang_path
-
-    @property
-    def critic_path(self) -> Path:
-        return self.yin_path
-
-
-def resolve_agent_path(root: Path, canonical: str, legacy: str) -> Path:
-    canonical_path = root / canonical
-    if canonical_path.exists():
-        return canonical_path
-    return root / legacy
-
-
 def resolve_prompt_path(root: Path, override_name: str, shared_name: str) -> Path:
     override_path = root / override_name
     if override_path.exists():
@@ -83,13 +59,10 @@ def resolve_prompt_path(root: Path, override_name: str, shared_name: str) -> Pat
 
 def run_slug_for_unit(root: Path) -> Path:
     units_root = ROOT / "units"
-    legacy_root = ROOT / "legacy"
     if root == ROOT:
         return Path("root")
     if root.is_relative_to(units_root):
         return root.relative_to(units_root)
-    if root.is_relative_to(legacy_root):
-        return Path("legacy") / root.relative_to(legacy_root)
     if root.is_relative_to(ROOT):
         return root.relative_to(ROOT)
     return Path(root.name)
@@ -99,16 +72,16 @@ def resolve_run_root(root: Path) -> Path:
     return ROOT / "runs" / run_slug_for_unit(root) / "current"
 
 
-def dual_loop_paths(env_root: Path | str | None = None) -> DualLoopPaths:
-    root = resolve_env_root(env_root)
+def dual_loop_paths(unit_root: Path | str) -> DualLoopPaths:
+    root = resolve_unit_root(unit_root)
     run_root = resolve_run_root(root)
     return DualLoopPaths(
         unit_root=root,
         run_root=run_root,
         queue_root=run_root / "queue",
         prompt_path=root / "prompt.md",
-        yang_path=resolve_agent_path(root, "yang.py", "builder.py"),
-        yin_path=resolve_agent_path(root, "yin.py", "critic.py"),
+        yang_path=root / "yang.py",
+        yin_path=root / "yin.py",
         yang_scratchpad_path=run_root / "yang_scratchpad.md",
         yin_scratchpad_path=run_root / "yin_scratchpad.md",
         yang_prompt_path=resolve_prompt_path(root, "yang_prompt.override.md", "yang_prompt.md"),
@@ -164,7 +137,7 @@ def run_environment(paths: DualLoopPaths):
 
 
 def load_callable(path: Path, attr_name: str) -> Callable[..., Any]:
-    module_name = f"autoratchet_{path.stem}_{attr_name}_{path.stat().st_mtime_ns}"
+    module_name = f"taiji_{path.stem}_{attr_name}_{path.stat().st_mtime_ns}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module from {path}")
@@ -248,10 +221,6 @@ def write_law(paths: DualLoopPaths, world: dict[str, Any], passed: bool | None =
             ]
         )
     paths.law_path.write_text("".join(lines), encoding="utf-8")
-
-
-def write_rubric(paths: DualLoopPaths, world: dict[str, Any], passed: bool | None = None) -> None:
-    write_law(paths, world, passed)
 
 
 def append_history(
@@ -373,19 +342,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     seed_parser = subparsers.add_parser("seed", help="Run yin first to materialize the initial world and law")
-    seed_parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, default=ROOT, help="Unit root; defaults to the repo root")
+    seed_parser.add_argument("--unit-root", type=Path, required=True, help="Unit root")
     round_parser = subparsers.add_parser("round", help="Run one yin/yang round")
-    round_parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, default=ROOT, help="Unit root; defaults to the repo root")
+    round_parser.add_argument("--unit-root", type=Path, required=True, help="Unit root")
     round_parser.add_argument("--no-auto-seed", action="store_true", help="Do not seed law automatically if missing")
     status_parser = subparsers.add_parser("status", help="Show current generated artifact paths and latest history entry")
-    status_parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, default=ROOT, help="Unit root; defaults to the repo root")
+    status_parser.add_argument("--unit-root", type=Path, required=True, help="Unit root")
     return parser
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    paths = dual_loop_paths(args.env_root)
+    paths = dual_loop_paths(args.unit_root)
 
     if args.command == "seed":
         print(json.dumps(seed(paths), indent=2, sort_keys=False))

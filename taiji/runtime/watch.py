@@ -47,7 +47,7 @@ def log_line(log_path: Path, message: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Taiji watch process for the yin/yang loop")
-    parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, required=True, help="Unit root for the yin/yang unit")
+    parser.add_argument("--unit-root", type=Path, required=True, help="Unit root for the yin/yang unit")
     parser.add_argument("--python-executable", default=sys.executable, help="Python executable used for child restarts")
     parser.add_argument("--stop-path", type=Path, default=None, help="Create this file to stop the supervisor")
     parser.add_argument("--child-pid-path", type=Path, default=None, help="Path that tracks the live loop child pid")
@@ -79,18 +79,10 @@ def build_child_command(args: argparse.Namespace) -> list[str]:
         "-m",
         "taiji.loop",
         "--unit-root",
-        str(args.env_root),
+        str(args.unit_root),
         *DEFAULT_LOOP_ARGS,
         *extra_args,
     ]
-
-
-def default_queue_path(queue_root: Path, primary_name: str, legacy_name: str) -> Path:
-    primary_path = queue_root / primary_name
-    legacy_path = queue_root / legacy_name
-    if legacy_path.exists() and not primary_path.exists():
-        return legacy_path
-    return primary_path
 
 
 def create_child_logs(queue_root: Path) -> tuple[Path, Path]:
@@ -135,18 +127,18 @@ def main() -> None:
     configure_stdio()
     parser = build_parser()
     args = parser.parse_args()
-    paths = dual_loop_paths(args.env_root)
+    paths = dual_loop_paths(args.unit_root)
     queue_root = paths.queue_root
     queue_root.mkdir(parents=True, exist_ok=True)
 
     if args.stop_path is None:
-        args.stop_path = default_queue_path(queue_root, "loop.stop", "dual_autoloop.stop")
+        args.stop_path = queue_root / "loop.stop"
     if args.child_pid_path is None:
-        args.child_pid_path = default_queue_path(queue_root, "loop.pid", "dual_autoloop.pid")
+        args.child_pid_path = queue_root / "loop.pid"
     if args.supervisor_pid_path is None:
-        args.supervisor_pid_path = default_queue_path(queue_root, "watch.pid", "dual-autoloop-supervisor.pid")
+        args.supervisor_pid_path = queue_root / "watch.pid"
     if args.supervisor_log_path is None:
-        args.supervisor_log_path = default_queue_path(queue_root, "watch.log", "dual-autoloop-supervisor.log")
+        args.supervisor_log_path = queue_root / "watch.log"
     current_run_path = queue_root / "current-run.json"
 
     args.stop_path.parent.mkdir(parents=True, exist_ok=True)

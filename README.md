@@ -20,7 +20,7 @@ Everything else is shared runtime or generated run state.
 
 `yin` defines the world and the law. `yang` searches for a solution inside that world. The runtime executes the cycle, records artifacts, and never invents criteria of its own.
 
-The architecture is described in [docs/builder-critic-loop.md](../docs/builder-critic-loop.md).
+The architecture is described in [docs/builder-critic-loop.md](docs/builder-critic-loop.md).
 
 ## Layout
 

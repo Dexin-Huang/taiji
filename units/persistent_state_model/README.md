@@ -1,6 +1,6 @@
 # persistent_state_model
 
-This environment pressures persistent hidden state and online improvement together.
+This unit pressures persistent hidden state and online improvement together.
 
 Files the agents own:
 
@@ -8,15 +8,15 @@ Files the agents own:
 - `yang.py`
 - `yin.py`
 
-Shared prompt templates live in [prompts/yin_yang](D:/Projects/autoratchet/prompts/yin_yang):
+Shared prompt templates live in [prompts/yin_yang](../../prompts/yin_yang):
 
-- [yang_prompt.md](D:/Projects/autoratchet/prompts/yin_yang/yang_prompt.md)
-- [yin_prompt.md](D:/Projects/autoratchet/prompts/yin_yang/yin_prompt.md)
-- [yin_seed_prompt.md](D:/Projects/autoratchet/prompts/yin_yang/yin_seed_prompt.md)
-- [yang_system_prompt.txt](D:/Projects/autoratchet/prompts/yin_yang/yang_system_prompt.txt)
-- [yin_system_prompt.txt](D:/Projects/autoratchet/prompts/yin_yang/yin_system_prompt.txt)
+- [yang_prompt.md](../../prompts/yin_yang/yang_prompt.md)
+- [yin_prompt.md](../../prompts/yin_yang/yin_prompt.md)
+- [yin_seed_prompt.md](../../prompts/yin_yang/yin_seed_prompt.md)
+- [yang_system_prompt.txt](../../prompts/yin_yang/yang_system_prompt.txt)
+- [yin_system_prompt.txt](../../prompts/yin_yang/yin_system_prompt.txt)
 
-If this env needs custom prompts, add env-local overrides:
+If this unit needs custom prompts, add unit-local overrides:
 
 - `yang_prompt.override.md`
 - `yin_prompt.override.md`
@@ -28,36 +28,36 @@ The editable prompt templates support placeholders such as:
 
 - `{iteration}`
 - `{goal}`
-- `{rubric}`
+- `{law}`
 - `{world}`
 - `{results}`
 - `{history}`
 - `{yang_file}`
 - `{yin_file}`
 
-Files the shared orchestrator generates:
+Files the shared orchestrator generates under `runs/persistent_state_model/current/`:
 
 - `world.json`
-- `rubric.md`
+- `law.md`
 - `results.json`
 - `history.ndjson`
 
 Seed yin first:
 
 ```bash
-python -m lab.dualloop seed --env-root envs/persistent_state_model
+python -m taiji.cycle seed --unit-root units/persistent_state_model
 ```
 
 Run one round:
 
 ```bash
-python -m lab.dualloop round --env-root envs/persistent_state_model
+python -m taiji.cycle round --unit-root units/persistent_state_model
 ```
 
 Run it autoresearch-style forever:
 
 ```bash
-python -m lab.dual_autoloop --env-root envs/persistent_state_model --iterations -1 --resume-yang-session
+python -m taiji.loop --unit-root units/persistent_state_model --iterations -1 --resume-yang-session
 ```
 
 In this world:

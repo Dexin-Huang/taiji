@@ -24,7 +24,7 @@ from typing import Any
 import anyio
 
 from .cycle import append_history, dual_loop_paths, run_yang, run_yin_passes, run_yin_world, validate_yin
-from .schema import ROOT, append_ndjson, read_ndjson, resolve_env_root, write_json
+from .schema import ROOT, append_ndjson, read_ndjson, write_json
 
 DEFAULT_AGENT_TOOLS = [
     "Read",
@@ -110,8 +110,6 @@ def load_state(path: Path) -> DualLoopState:
     if not path.exists():
         return DualLoopState()
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if "builder_session_id" in payload and "yang_session_id" not in payload:
-        payload["yang_session_id"] = payload.pop("builder_session_id")
     return DualLoopState(**payload)
 
 
@@ -401,7 +399,7 @@ def session_slug(path: Path) -> str:
     except ValueError:
         relative = path.name
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", relative.strip("/"))
-    return slug or "env"
+    return slug or "unit"
 
 
 def history_summary(paths: Any, limit: int = 6) -> str:
@@ -424,10 +422,6 @@ def law_text(paths: Any) -> str:
     if not paths.law_path.exists():
         return "No law yet."
     return paths.law_path.read_text(encoding="utf-8").strip()
-
-
-def rubric_text(paths: Any) -> str:
-    return law_text(paths)
 
 
 def prompt_text(paths: Any) -> str:
@@ -513,7 +507,6 @@ def prompt_context(paths: Any, *, iteration: int | None = None) -> dict[str, str
     return {
         "iteration": "" if iteration is None else str(iteration),
         "goal": prompt_text(paths),
-        "rubric": law_text(paths),
         "law": law_text(paths),
         "world": latest_world(paths),
         "results": latest_results(paths),
@@ -528,7 +521,6 @@ def prompt_context(paths: Any, *, iteration: int | None = None) -> dict[str, str
         "history_file": relative_artifact_path(paths.history_path),
         "unit_root": relative_artifact_path(paths.unit_root),
         "run_root": relative_artifact_path(paths.run_root),
-        "env_root": relative_artifact_path(paths.unit_root),
     }
 
 
@@ -655,16 +647,16 @@ async def run_agent_turn(
     return final_session_id, "\n".join(assistant_lines).strip()
 
 
-async def run_dual_autoloop(args: argparse.Namespace) -> None:
-    paths = dual_loop_paths(args.env_root)
+async def run_loop(args: argparse.Namespace) -> None:
+    paths = dual_loop_paths(args.unit_root)
     queue_root = paths.queue_root
     queue_root.mkdir(parents=True, exist_ok=True)
     state = load_state(args.state_path)
     sdk = load_claude_agent_sdk()
 
     slug = session_slug(paths.unit_root)
-    yang_session_name = f"autoratchet-yang-{slug}"
-    yin_session_name = f"autoratchet-yin-{slug}"
+    yang_session_name = f"taiji-yang-{slug}"
+    yin_session_name = f"taiji-yin-{slug}"
     yang_home = args.yang_claude_home or (queue_root / "yang-claude-home")
     yin_home = args.yin_claude_home or (queue_root / "yin-claude-home")
     started_at = time.monotonic()
@@ -765,7 +757,7 @@ async def run_dual_autoloop(args: argparse.Namespace) -> None:
             note = str(tool_args.get("note", "")).strip() or "trial"
             return await cycle_state.run(note)
 
-        server = sdk.create_sdk_mcp_server(name="autoratchet", tools=[run_cycle_tool])
+        server = sdk.create_sdk_mcp_server(name="taiji", tools=[run_cycle_tool])
         yang_dir = agent_artifact_dir(iter_dir, "yang")
         yang_before = read_text(paths.yang_path)
         yang_prompt = yang_turn_prompt(paths, state.iteration)
@@ -795,11 +787,11 @@ async def run_dual_autoloop(args: argparse.Namespace) -> None:
             claude_home=yang_home,
             resume_session_id=state.yang_session_id if args.resume_yang_session else None,
             session_id=yang_session_name,
-            mcp_servers={"autoratchet": server},
+            mcp_servers={"taiji": server},
             tools=DEFAULT_AGENT_TOOLS,
             allowed_tools=[
                 *DEFAULT_AGENT_TOOLS,
-                "mcp__autoratchet__run_cycle",
+                "mcp__taiji__run_cycle",
             ],
         )
         if yang_text:
@@ -958,18 +950,18 @@ async def run_dual_autoloop(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Taiji yin/yang loop")
-    parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, required=True, help="Unit root for the yin/yang unit")
+    parser.add_argument("--unit-root", type=Path, required=True, help="Unit root for the yin/yang unit")
     parser.add_argument("--iterations", type=int, default=1, help="-1 runs until interrupted; otherwise run this many iterations")
     parser.add_argument("--max-wall-sec", type=int, default=0, help="Stop after this many wall-clock seconds; 0 disables the limit")
-    parser.add_argument("--yang-max-turns", "--builder-max-turns", dest="yang_max_turns", type=int, default=8, help="Max Claude turns for each yang edit cycle")
-    parser.add_argument("--yang-max-cycle-calls", "--builder-max-cycle-calls", dest="yang_max_cycle_calls", type=int, default=6, help="Maximum immutable run_cycle calls allowed per yang turn")
-    parser.add_argument("--yin-max-turns", "--critic-max-turns", dest="yin_max_turns", type=int, default=6, help="Max Claude turns for each yin edit cycle")
+    parser.add_argument("--yang-max-turns", type=int, default=8, help="Max Claude turns for each yang edit cycle")
+    parser.add_argument("--yang-max-cycle-calls", type=int, default=6, help="Maximum immutable run_cycle calls allowed per yang turn")
+    parser.add_argument("--yin-max-turns", type=int, default=6, help="Max Claude turns for each yin edit cycle")
     parser.add_argument("--cli-path", type=str, default=None, help="Optional path to the Claude Code CLI binary")
     parser.add_argument("--claude-model", type=str, default=None, help="Optional Claude model override")
     parser.add_argument("--state-path", type=Path, default=None, help="Loop state path; defaults under unit_root/queue")
-    parser.add_argument("--yang-claude-home", "--builder-claude-home", dest="yang_claude_home", type=Path, default=None, help="Claude home for the yang session")
-    parser.add_argument("--yin-claude-home", "--critic-claude-home", dest="yin_claude_home", type=Path, default=None, help="Claude home for the yin session")
-    parser.add_argument("--resume-yang-session", "--resume-builder-session", dest="resume_yang_session", action="store_true", help="Resume the persistent yang Claude session")
+    parser.add_argument("--yang-claude-home", type=Path, default=None, help="Claude home for the yang session")
+    parser.add_argument("--yin-claude-home", type=Path, default=None, help="Claude home for the yin session")
+    parser.add_argument("--resume-yang-session", action="store_true", help="Resume the persistent yang Claude session")
     parser.add_argument("--stop-on-converged", action="store_true", help="Stop when yang passes and yin does not change yin.py")
     return parser
 
@@ -979,11 +971,9 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     if args.state_path is None:
-        queue_root = dual_loop_paths(args.env_root).queue_root
-        primary_state_path = queue_root / "loop_state.json"
-        legacy_state_path = queue_root / "dual_autoloop_state.json"
-        args.state_path = legacy_state_path if legacy_state_path.exists() and not primary_state_path.exists() else primary_state_path
-    anyio.run(run_dual_autoloop, args)
+        queue_root = dual_loop_paths(args.unit_root).queue_root
+        args.state_path = queue_root / "loop_state.json"
+    anyio.run(run_loop, args)
 
 
 if __name__ == "__main__":
