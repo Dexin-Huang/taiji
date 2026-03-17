@@ -45,6 +45,14 @@ taiji/
 
 ## Commands
 
+Create a new unit from a concept:
+
+```bash
+python -m taiji.cycle new my_unit --goal "Develop a self-improving model architecture."
+```
+
+If you prefer, create only `units/my_unit/prompt.md` by hand. On the first `seed`, `round`, or `loop`, taiji will materialize `unit.yaml`, `yang.py`, and `yin.py` from templates.
+
 Run one mechanical seed or round:
 
 ```bash

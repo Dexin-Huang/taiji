@@ -17,6 +17,7 @@ from typing import Any
 
 import anyio
 
+from .bootstrap import bootstrap_unit
 from .agents import (
     DEFAULT_AGENT_TOOLS,
     DualLoopState,
@@ -60,6 +61,7 @@ def configure_stdio() -> None:
 
 async def run_loop(args: argparse.Namespace) -> None:
     paths = dual_loop_paths(args.unit_root)
+    bootstrap_unit(paths.unit_root, include_readme=False, require_prompt=True)
     queue_root = paths.queue_root
     queue_root.mkdir(parents=True, exist_ok=True)
     state = load_state(args.state_path)

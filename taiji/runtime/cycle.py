@@ -1,4 +1,4 @@
-"""
+﻿"""
 Shared taiji yin/yang cycle.
 
 Each unit owns only:
@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .bootstrap import bootstrap_unit, resolve_new_unit_root
 from .schema import ROOT, append_ndjson, iso_timestamp_now, resolve_unit_root, write_json
 
 Scalar = str | int | float | bool | None
@@ -49,6 +50,7 @@ class DualLoopPaths:
     history_path: Path
     ideas_path: Path
     frontier_path: Path
+
 
 def resolve_prompt_path(root: Path, override_name: str, shared_name: str) -> Path:
     override_path = root / override_name
@@ -214,12 +216,10 @@ def write_law(paths: DualLoopPaths, world: dict[str, Any], passed: bool | None =
         "Acceptance is defined by `yin.passes(results)` in `yin.py`.\n",
     ]
     if passed is not None:
-        lines.extend(
-            [
-                "\n## Last Outcome\n\n",
-                f"- passed: `{str(bool(passed)).lower()}`\n",
-            ]
-        )
+        lines.extend([
+            "\n## Last Outcome\n\n",
+            f"- passed: `{str(bool(passed)).lower()}`\n",
+        ])
     paths.law_path.write_text("".join(lines), encoding="utf-8")
 
 
@@ -337,9 +337,24 @@ def status(paths: DualLoopPaths) -> dict[str, Any]:
     }
 
 
+def prompt_text_from_args(goal: str | None, prompt_file: Path | None) -> str | None:
+    if goal and prompt_file is not None:
+        raise RuntimeError("Use either --goal or --prompt-file, not both.")
+    if prompt_file is not None:
+        return prompt_file.read_text(encoding="utf-8")
+    return goal
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Taiji yin/yang cycle")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    new_parser = subparsers.add_parser("new", help="Create a new unit scaffold from a concept")
+    new_parser.add_argument("target", help="Unit name under units/ or explicit unit path")
+    new_parser.add_argument("--goal", type=str, default=None, help="Goal text written into prompt.md")
+    new_parser.add_argument("--prompt-file", type=Path, default=None, help="Read prompt.md content from a file")
+    new_parser.add_argument("--force", action="store_true", help="Overwrite scaffolded files if they already exist")
+    new_parser.add_argument("--no-readme", action="store_true", help="Do not create README.md")
 
     seed_parser = subparsers.add_parser("seed", help="Run yin first to materialize the initial world and law")
     seed_parser.add_argument("--unit-root", type=Path, required=True, help="Unit root")
@@ -354,7 +369,22 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command == "new":
+        payload = bootstrap_unit(
+            resolve_new_unit_root(args.target),
+            prompt_text=prompt_text_from_args(args.goal, args.prompt_file),
+            force=args.force,
+            include_readme=not args.no_readme,
+            require_prompt=False,
+        )
+        print(json.dumps(payload, indent=2, sort_keys=False))
+        return
+
     paths = dual_loop_paths(args.unit_root)
+
+    if args.command in {"seed", "round"}:
+        bootstrap_unit(paths.unit_root, include_readme=False, require_prompt=True)
 
     if args.command == "seed":
         print(json.dumps(seed(paths), indent=2, sort_keys=False))
