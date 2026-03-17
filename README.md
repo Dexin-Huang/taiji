@@ -20,7 +20,7 @@ Everything else is shared runtime or generated run state.
 
 `yin` defines the world and the law. `yang` searches for a solution inside that world. The runtime executes the cycle, records artifacts, and never invents criteria of its own.
 
-The architecture is described in [docs/builder-critic-loop.md](docs/builder-critic-loop.md).
+The architecture is described directly in this README and in the source under `taiji/runtime/`.
 
 ## Layout
 
@@ -108,3 +108,4 @@ Each active run materializes under `runs/<unit>/current/`:
 - Single-file ownership is enforced through edit hooks.
 - Generated state stays out of `units/` so authored source remains clean.
 - `taiji.loop` and `taiji.watch` require the Claude Agent SDK. Install the optional dependency with `pip install .[agent]`, or keep a local clone at `references/claude-agent-sdk-python`.
+
