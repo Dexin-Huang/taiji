@@ -7,3 +7,6 @@ wheels/
 .venv/
 runs/
 references/
+.claude/
+CLAUDE.md
+AGENTS.md
