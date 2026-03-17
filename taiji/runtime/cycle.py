@@ -1,0 +1,402 @@
+"""
+Shared taiji yin/yang cycle.
+
+Each experiment owns only:
+- prompt.md
+- yang.py
+- yin.py
+
+The host is mechanical. Yin defines the world and acceptance condition.
+Yang writes a solution inside that world.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import inspect
+import json
+import os
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from .schema import ROOT, append_ndjson, iso_timestamp_now, resolve_env_root, write_json
+
+Scalar = str | int | float | bool | None
+SHARED_PROMPTS_ROOT = ROOT / "prompts" / "yin_yang"
+
+
+@dataclass(frozen=True)
+class DualLoopPaths:
+    unit_root: Path
+    run_root: Path
+    queue_root: Path
+    prompt_path: Path
+    yang_path: Path
+    yin_path: Path
+    yang_scratchpad_path: Path
+    yin_scratchpad_path: Path
+    yang_prompt_path: Path
+    yin_prompt_path: Path
+    yin_seed_prompt_path: Path
+    yang_system_prompt_path: Path
+    yin_system_prompt_path: Path
+    world_path: Path
+    law_path: Path
+    results_path: Path
+    history_path: Path
+    ideas_path: Path
+    frontier_path: Path
+
+    @property
+    def env_root(self) -> Path:
+        return self.unit_root
+
+    @property
+    def rubric_path(self) -> Path:
+        return self.law_path
+
+    @property
+    def builder_path(self) -> Path:
+        return self.yang_path
+
+    @property
+    def critic_path(self) -> Path:
+        return self.yin_path
+
+
+def resolve_agent_path(root: Path, canonical: str, legacy: str) -> Path:
+    canonical_path = root / canonical
+    if canonical_path.exists():
+        return canonical_path
+    return root / legacy
+
+
+def resolve_prompt_path(root: Path, override_name: str, shared_name: str) -> Path:
+    override_path = root / override_name
+    if override_path.exists():
+        return override_path
+    return SHARED_PROMPTS_ROOT / shared_name
+
+
+def run_slug_for_unit(root: Path) -> Path:
+    units_root = ROOT / "units"
+    legacy_root = ROOT / "legacy"
+    if root == ROOT:
+        return Path("root")
+    if root.is_relative_to(units_root):
+        return root.relative_to(units_root)
+    if root.is_relative_to(legacy_root):
+        return Path("legacy") / root.relative_to(legacy_root)
+    if root.is_relative_to(ROOT):
+        return root.relative_to(ROOT)
+    return Path(root.name)
+
+
+def resolve_run_root(root: Path) -> Path:
+    return ROOT / "runs" / run_slug_for_unit(root) / "current"
+
+
+def dual_loop_paths(env_root: Path | str | None = None) -> DualLoopPaths:
+    root = resolve_env_root(env_root)
+    run_root = resolve_run_root(root)
+    return DualLoopPaths(
+        unit_root=root,
+        run_root=run_root,
+        queue_root=run_root / "queue",
+        prompt_path=root / "prompt.md",
+        yang_path=resolve_agent_path(root, "yang.py", "builder.py"),
+        yin_path=resolve_agent_path(root, "yin.py", "critic.py"),
+        yang_scratchpad_path=run_root / "yang_scratchpad.md",
+        yin_scratchpad_path=run_root / "yin_scratchpad.md",
+        yang_prompt_path=resolve_prompt_path(root, "yang_prompt.override.md", "yang_prompt.md"),
+        yin_prompt_path=resolve_prompt_path(root, "yin_prompt.override.md", "yin_prompt.md"),
+        yin_seed_prompt_path=resolve_prompt_path(root, "yin_seed_prompt.override.md", "yin_seed_prompt.md"),
+        yang_system_prompt_path=resolve_prompt_path(root, "yang_system_prompt.override.txt", "yang_system_prompt.txt"),
+        yin_system_prompt_path=resolve_prompt_path(root, "yin_system_prompt.override.txt", "yin_system_prompt.txt"),
+        world_path=run_root / "world.json",
+        law_path=run_root / "law.md",
+        results_path=run_root / "results.json",
+        history_path=run_root / "history.ndjson",
+        ideas_path=run_root / "ideas.ndjson",
+        frontier_path=run_root / "frontier.json",
+    )
+
+
+@contextmanager
+def working_directory(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+@contextmanager
+def run_environment(paths: DualLoopPaths):
+    previous = {
+        "TAIJI_UNIT_ROOT": os.environ.get("TAIJI_UNIT_ROOT"),
+        "TAIJI_RUN_ROOT": os.environ.get("TAIJI_RUN_ROOT"),
+        "TAIJI_WORLD_PATH": os.environ.get("TAIJI_WORLD_PATH"),
+        "TAIJI_LAW_PATH": os.environ.get("TAIJI_LAW_PATH"),
+        "TAIJI_RESULTS_PATH": os.environ.get("TAIJI_RESULTS_PATH"),
+        "TAIJI_HISTORY_PATH": os.environ.get("TAIJI_HISTORY_PATH"),
+    }
+    paths.run_root.mkdir(parents=True, exist_ok=True)
+    os.environ["TAIJI_UNIT_ROOT"] = str(paths.unit_root)
+    os.environ["TAIJI_RUN_ROOT"] = str(paths.run_root)
+    os.environ["TAIJI_WORLD_PATH"] = str(paths.world_path)
+    os.environ["TAIJI_LAW_PATH"] = str(paths.law_path)
+    os.environ["TAIJI_RESULTS_PATH"] = str(paths.results_path)
+    os.environ["TAIJI_HISTORY_PATH"] = str(paths.history_path)
+    with working_directory(paths.run_root):
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def load_callable(path: Path, attr_name: str) -> Callable[..., Any]:
+    module_name = f"autoratchet_{path.stem}_{attr_name}_{path.stat().st_mtime_ns}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    fn = getattr(module, attr_name, None)
+    if not callable(fn):
+        raise RuntimeError(f"{path.name} must define callable {attr_name}()")
+    return fn
+
+
+def validate_zero_arg_signature(fn: Callable[..., Any], label: str) -> None:
+    signature = inspect.signature(fn)
+    if len(signature.parameters) != 0:
+        raise RuntimeError(f"{label} must not take arguments")
+
+
+def validate_one_arg_signature(fn: Callable[..., Any], label: str) -> None:
+    signature = inspect.signature(fn)
+    if len(signature.parameters) != 1:
+        raise RuntimeError(f"{label} must take exactly one argument")
+
+
+def ensure_json_object(name: str, raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"{name} must return dict, got {type(raw).__name__}")
+    try:
+        json.dumps(raw)
+    except TypeError as exc:
+        raise RuntimeError(f"{name} returned non-JSON-serializable data: {exc}") from exc
+    return dict(raw)
+
+
+def validate_flat_results(results: dict[str, Any]) -> None:
+    for key, value in results.items():
+        if not isinstance(key, str):
+            raise RuntimeError("yang results must use string keys")
+        if isinstance(value, (dict, list, tuple, set)):
+            raise RuntimeError(f"yang result {key!r} is not flat")
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            raise RuntimeError(f"yang result {key!r} has unsupported type {type(value).__name__}")
+
+
+def normalize_results(raw: Any) -> dict[str, Scalar]:
+    if not isinstance(raw, dict):
+        return {
+            "error": f"yang returned {type(raw).__name__}, expected dict",
+            "yang_contract_ok": False,
+        }
+    try:
+        validate_flat_results(raw)
+    except Exception as exc:
+        return {
+            "error": f"yang contract violation: {exc}",
+            "yang_contract_ok": False,
+        }
+    normalized = dict(raw)
+    normalized.setdefault("yang_contract_ok", True)
+    return normalized
+
+
+def write_world(paths: DualLoopPaths, world: dict[str, Any]) -> None:
+    write_json(paths.world_path, world)
+
+
+def write_law(paths: DualLoopPaths, world: dict[str, Any], passed: bool | None = None) -> None:
+    lines = [
+        "# Law\n\n",
+        "## World\n\n",
+        "```json\n",
+        json.dumps(world, indent=2, sort_keys=False),
+        "\n```\n\n",
+        "## Acceptance\n\n",
+        "Acceptance is defined by `yin.passes(results)` in `yin.py`.\n",
+    ]
+    if passed is not None:
+        lines.extend(
+            [
+                "\n## Last Outcome\n\n",
+                f"- passed: `{str(bool(passed)).lower()}`\n",
+            ]
+        )
+    paths.law_path.write_text("".join(lines), encoding="utf-8")
+
+
+def write_rubric(paths: DualLoopPaths, world: dict[str, Any], passed: bool | None = None) -> None:
+    write_law(paths, world, passed)
+
+
+def append_history(
+    paths: DualLoopPaths,
+    *,
+    phase: str,
+    world: dict[str, Any],
+    results: dict[str, Any],
+    passed: bool,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    record = {
+        "timestamp": iso_timestamp_now(),
+        "phase": phase,
+        "world": world,
+        "results": results,
+        "passed": passed,
+    }
+    if metadata:
+        record.update(metadata)
+    append_ndjson(paths.history_path, record)
+    return record
+
+
+def latest_history_entry(paths: DualLoopPaths) -> dict[str, Any] | None:
+    if not paths.history_path.exists():
+        return None
+    lines = [line.strip() for line in paths.history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        return None
+    return json.loads(lines[-1])
+
+
+def run_yang(paths: DualLoopPaths) -> dict[str, Scalar]:
+    yang = load_callable(paths.yang_path, "run")
+    validate_zero_arg_signature(yang, "yang.run()")
+    try:
+        with run_environment(paths):
+            raw_results = yang()
+    except Exception as exc:
+        raw_results = {"error": f"yang crashed: {type(exc).__name__}: {exc}"}
+    results = normalize_results(raw_results)
+    write_json(paths.results_path, results)
+    return results
+
+
+def run_yin_world(paths: DualLoopPaths) -> dict[str, Any]:
+    world_fn = load_callable(paths.yin_path, "world")
+    validate_zero_arg_signature(world_fn, "yin.world()")
+    with run_environment(paths):
+        raw_world = world_fn()
+    world = ensure_json_object("yin.world()", raw_world)
+    write_world(paths, world)
+    write_law(paths, world)
+    return world
+
+
+def run_yin_passes(paths: DualLoopPaths, results: dict[str, Scalar]) -> bool:
+    passes_fn = load_callable(paths.yin_path, "passes")
+    validate_one_arg_signature(passes_fn, "yin.passes(results)")
+    with run_environment(paths):
+        raw_passed = passes_fn(results)
+    if not isinstance(raw_passed, bool):
+        raise RuntimeError(f"yin.passes(results) must return bool, got {type(raw_passed).__name__}")
+    return raw_passed
+
+
+def validate_yin(paths: DualLoopPaths, probe_results: dict[str, Scalar] | None = None) -> dict[str, Any]:
+    world = run_yin_world(paths)
+    probe = {} if probe_results is None else probe_results
+    run_yin_passes(paths, probe)
+    return world
+
+
+def seed(paths: DualLoopPaths) -> dict[str, Any]:
+    world = validate_yin(paths)
+    return append_history(paths, phase="seed", world=world, results={}, passed=False)
+
+
+def run_round(paths: DualLoopPaths, *, auto_seed: bool = True) -> dict[str, Any]:
+    if auto_seed and not paths.law_path.exists():
+        seed(paths)
+
+    world = run_yin_world(paths)
+    results = run_yang(paths)
+    passed = run_yin_passes(paths, results)
+    write_law(paths, world, passed)
+    return append_history(paths, phase="round", world=world, results=results, passed=passed)
+
+
+def status(paths: DualLoopPaths) -> dict[str, Any]:
+    entry = latest_history_entry(paths)
+    return {
+        "unit_root": str(paths.unit_root),
+        "run_root": str(paths.run_root),
+        "queue_root": str(paths.queue_root),
+        "prompt_path": str(paths.prompt_path),
+        "yang_path": str(paths.yang_path),
+        "yin_path": str(paths.yin_path),
+        "yang_scratchpad_path": str(paths.yang_scratchpad_path),
+        "yin_scratchpad_path": str(paths.yin_scratchpad_path),
+        "yang_prompt_path": str(paths.yang_prompt_path),
+        "yin_prompt_path": str(paths.yin_prompt_path),
+        "yin_seed_prompt_path": str(paths.yin_seed_prompt_path),
+        "yang_system_prompt_path": str(paths.yang_system_prompt_path),
+        "yin_system_prompt_path": str(paths.yin_system_prompt_path),
+        "world_path": str(paths.world_path),
+        "law_path": str(paths.law_path),
+        "results_path": str(paths.results_path),
+        "history_path": str(paths.history_path),
+        "ideas_path": str(paths.ideas_path),
+        "frontier_path": str(paths.frontier_path),
+        "latest": entry,
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Taiji yin/yang cycle")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    seed_parser = subparsers.add_parser("seed", help="Run yin first to materialize the initial world and law")
+    seed_parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, default=ROOT, help="Unit root; defaults to the repo root")
+    round_parser = subparsers.add_parser("round", help="Run one yin/yang round")
+    round_parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, default=ROOT, help="Unit root; defaults to the repo root")
+    round_parser.add_argument("--no-auto-seed", action="store_true", help="Do not seed law automatically if missing")
+    status_parser = subparsers.add_parser("status", help="Show current generated artifact paths and latest history entry")
+    status_parser.add_argument("--unit-root", "--env-root", dest="env_root", type=Path, default=ROOT, help="Unit root; defaults to the repo root")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    paths = dual_loop_paths(args.env_root)
+
+    if args.command == "seed":
+        print(json.dumps(seed(paths), indent=2, sort_keys=False))
+        return
+
+    if args.command == "round":
+        print(json.dumps(run_round(paths, auto_seed=not args.no_auto_seed), indent=2, sort_keys=False))
+        return
+
+    print(json.dumps(status(paths), indent=2, sort_keys=False))
+
+
+if __name__ == "__main__":
+    main()
