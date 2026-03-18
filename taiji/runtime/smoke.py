@@ -147,8 +147,10 @@ def temporary_unit() -> Iterator[tuple[Path, Any]]:
 
 
 def _write_unit(paths: Any, *, yin_text: str, yang_text: str) -> None:
-    paths.yin_path.write_text(yin_text, encoding="utf-8")
-    paths.yang_path.write_text(yang_text, encoding="utf-8")
+    paths.yin_seed_path.write_text(yin_text, encoding="utf-8")
+    paths.yang_seed_path.write_text(yang_text, encoding="utf-8")
+    paths.yin_path.unlink(missing_ok=True)
+    paths.yang_path.unlink(missing_ok=True)
 
 
 def run_kernel_check() -> dict[str, Any]:
@@ -276,6 +278,36 @@ def run_adaptive_probe_check() -> dict[str, Any]:
         }
 
 
+def run_seed_workspace_check() -> dict[str, Any]:
+    with temporary_unit() as (_, paths):
+        _write_unit(paths, yin_text=YIN_PASSING, yang_text=YANG_PASSING)
+        seed(paths)
+
+        _require(paths.yin_path.exists(), "run-local yin working copy was not materialized")
+        _require(paths.yang_path.exists(), "run-local yang working copy was not materialized")
+        _require(
+            paths.yin_seed_path.read_text(encoding="utf-8") == YIN_PASSING,
+            "unit yin seed changed during seed materialization",
+        )
+        _require(
+            paths.yang_seed_path.read_text(encoding="utf-8") == YANG_PASSING,
+            "unit yang seed changed during seed materialization",
+        )
+
+        paths.yin_path.write_text(YIN_OTHER_TARGET, encoding="utf-8")
+        _require(
+            paths.yin_seed_path.read_text(encoding="utf-8") == YIN_PASSING,
+            "editing the run-local yin file should not mutate the unit seed",
+        )
+
+        return {
+            "name": "seed_workspace",
+            "ok": True,
+            "yin_seed": paths.yin_seed_path.name,
+            "yin_work": paths.yin_path.name,
+        }
+
+
 def run_unit_config_check() -> dict[str, Any]:
     with temporary_unit() as (unit_root, _):
         (unit_root / "spec.md").write_text(PROMPT_TEXT, encoding="utf-8")
@@ -355,6 +387,8 @@ def run_selected_checks(selection: str) -> list[dict[str, Any]]:
         checks.append(run_fixed_snapshot_check())
     if selection in {"all", "adaptive_probe"}:
         checks.append(run_adaptive_probe_check())
+    if selection in {"all", "seed_workspace"}:
+        checks.append(run_seed_workspace_check())
     if selection in {"all", "unit_config"}:
         checks.append(run_unit_config_check())
     if selection in {"all", "ownership"}:
@@ -366,7 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run lightweight taiji smoke checks")
     parser.add_argument(
         "--check",
-        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "unit_config", "ownership"),
+        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "seed_workspace", "unit_config", "ownership"),
         default="all",
         help="Select which lightweight check to run",
     )

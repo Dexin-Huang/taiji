@@ -45,6 +45,8 @@ class DualLoopPaths:
     run_root: Path
     queue_root: Path
     prompt_path: Path
+    yang_seed_path: Path
+    yin_seed_path: Path
     yang_path: Path
     yin_path: Path
     yang_scratchpad_path: Path
@@ -92,8 +94,10 @@ def dual_loop_paths(unit_root: Path | str) -> DualLoopPaths:
         run_root=run_root,
         queue_root=run_root / "queue",
         prompt_path=root / config.prompt_entry,
-        yang_path=root / config.yang_entry,
-        yin_path=root / config.yin_entry,
+        yang_seed_path=root / config.yang_entry,
+        yin_seed_path=root / config.yin_entry,
+        yang_path=run_root / config.yang_entry,
+        yin_path=run_root / config.yin_entry,
         yang_scratchpad_path=run_root / "yang_scratchpad.md",
         yin_scratchpad_path=run_root / "yin_scratchpad.md",
         yang_prompt_path=resolve_prompt_path(root, "yang_prompt.override.md", "yang_prompt.md", prompt_set),
@@ -171,6 +175,23 @@ def load_callable(path: Path, attr_name: str, *, label: str | None = None) -> Ca
     if not callable(fn):
         raise RuntimeError(f"{path.name} must define callable {attr_name}()")
     return fn
+
+
+def copy_seed_file(seed_path: Path, work_path: Path) -> None:
+    if not seed_path.exists():
+        raise RuntimeError(f"Seed file is missing: {seed_path}")
+    work_path.parent.mkdir(parents=True, exist_ok=True)
+    work_path.write_text(seed_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def ensure_run_workspace(paths: DualLoopPaths, *, refresh: bool = False) -> None:
+    paths.run_root.mkdir(parents=True, exist_ok=True)
+    for seed_path, work_path in (
+        (paths.yang_seed_path, paths.yang_path),
+        (paths.yin_seed_path, paths.yin_path),
+    ):
+        if refresh or not work_path.exists():
+            copy_seed_file(seed_path, work_path)
 
 
 def validate_zero_arg_signature(fn: Callable[..., Any], label: str) -> None:
@@ -262,6 +283,7 @@ def latest_history_entry(paths: DualLoopPaths) -> dict[str, Any] | None:
 
 
 def run_yang(paths: DualLoopPaths) -> JSONObject:
+    ensure_run_workspace(paths)
     yang = load_callable(paths.yang_path, "run")
     validate_zero_arg_signature(yang, "yang.run()")
     try:
@@ -275,12 +297,14 @@ def run_yang(paths: DualLoopPaths) -> JSONObject:
 
 
 def run_yin_world(paths: DualLoopPaths) -> dict[str, Any]:
+    ensure_run_workspace(paths)
     if has_materialized_law(paths):
         return load_materialized_snapshot(paths).world
     return build_law_snapshot(paths, paths.yin_path, label="live-yin-world-only").world
 
 
 def run_yin_passes(paths: DualLoopPaths, results: JSONObject) -> bool:
+    ensure_run_workspace(paths)
     if has_materialized_law(paths):
         snapshot = load_materialized_snapshot(paths)
     else:
@@ -289,6 +313,7 @@ def run_yin_passes(paths: DualLoopPaths, results: JSONObject) -> bool:
 
 
 def validate_yin(paths: DualLoopPaths, probe_results: JSONObject | None = None) -> YinValidation:
+    ensure_run_workspace(paths)
     validation = validate_live_yin(paths, probe_results)
     materialize_law_snapshot(paths, validation.snapshot)
     return validation
@@ -340,6 +365,8 @@ def status(paths: DualLoopPaths) -> dict[str, Any]:
         "run_root": str(paths.run_root),
         "queue_root": str(paths.queue_root),
         "prompt_path": str(paths.prompt_path),
+        "yang_seed_path": str(paths.yang_seed_path),
+        "yin_seed_path": str(paths.yin_seed_path),
         "yang_path": str(paths.yang_path),
         "yin_path": str(paths.yin_path),
         "yang_scratchpad_path": str(paths.yang_scratchpad_path),

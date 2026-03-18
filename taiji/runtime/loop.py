@@ -33,7 +33,7 @@ from .agents import (
     save_state,
     write_iteration_summary,
 )
-from .cycle import append_history, dual_loop_paths, seed, validate_yin
+from .cycle import append_history, dual_loop_paths, ensure_run_workspace, seed, validate_yin
 from .ideas import record_seed_idea, record_yang_idea, record_yin_idea
 from .law import evaluate_snapshot, has_materialized_law, load_materialized_snapshot
 from .prompts import (
@@ -64,6 +64,7 @@ async def run_loop(args: argparse.Namespace) -> None:
     paths = dual_loop_paths(args.unit_root)
     bootstrap_unit(paths.unit_root, include_readme=False, require_prompt=True)
     paths = dual_loop_paths(paths.unit_root)
+    ensure_run_workspace(paths)
     adaptive_mode = args.mode == "adaptive"
     queue_root = paths.queue_root
     queue_root.mkdir(parents=True, exist_ok=True)
@@ -81,6 +82,8 @@ async def run_loop(args: argparse.Namespace) -> None:
     print(f"SDK source: {sdk_source}")
     print(f"Unit root: {paths.unit_root}")
     print(f"Mode: {args.mode}")
+    print(f"Yang seed: {paths.yang_seed_path}")
+    print(f"Yin seed: {paths.yin_seed_path}")
     print(f"Yang file: {paths.yang_path}")
     print(f"Yin file: {paths.yin_path}")
     print(f"State file: {args.state_path}")

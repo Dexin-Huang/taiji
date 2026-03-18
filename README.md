@@ -10,7 +10,7 @@ Each unit is a tiny authored surface:
 - `unit.toml`
 - optional `README.md`
 
-Everything else is shared runtime or generated run state.
+These are seeds. A run copies `yang.py` and `yin.py` into `runs/.../current/` and edits only the run-local working copies.
 
 ## Model
 
@@ -43,6 +43,8 @@ taiji/
   runs/
     <unit>/
       current/
+        yang.py
+        yin.py
 ```
 
 ## Commands
@@ -108,6 +110,8 @@ A unit can override any of them with:
 
 Each active run materializes under `runs/<unit>/current/`:
 
+- `yang.py`
+- `yin.py`
 - `world.json`
 - `law.md`
 - `law_state.json`
@@ -121,6 +125,7 @@ Each active run materializes under `runs/<unit>/current/`:
 - `queue/`
 
 `results.json` is the latest JSON submission from `yang.py`. It may contain nested evidence and artifact paths.
+The `yang.py` and `yin.py` files under `runs/<unit>/current/` are the live working copies for that run. The unit files remain unchanged seeds.
 
 ## Included Units
 
