@@ -12,9 +12,10 @@ def world() -> dict:
 
 def passes(results: dict) -> bool:
     """
-    Return True if yang's latest results count as a pass in the current world.
+    Return True if yang's latest JSON submission counts as a pass in the current world.
 
     Keep this law simple and public.
+    You may inspect nested evidence and the implementation in yang.py directly.
     If yang passes too easily, wake and rewrite world() and/or passes(results).
     """
     return False

@@ -11,7 +11,9 @@ from typing import Any, Callable, Iterator
 
 from .schema import iso_timestamp_now, read_json, write_json
 
-Scalar = str | int | float | bool | None
+JSONScalar = str | int | float | bool | None
+JSONValue = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
+JSONObject = dict[str, JSONValue]
 
 
 @dataclass(frozen=True)
@@ -20,13 +22,13 @@ class LawSnapshot:
     source_text: str
     source_hash: str
     world: dict[str, Any]
-    passes_fn: Callable[[dict[str, Scalar]], bool]
+    passes_fn: Callable[[JSONObject], bool]
 
 
 @dataclass(frozen=True)
 class YinValidation:
     snapshot: LawSnapshot
-    probe_results: dict[str, Scalar]
+    probe_results: JSONObject
     probe_passed: bool
 
 
@@ -88,7 +90,7 @@ def build_law_snapshot(paths: Any, source_path: Path, *, label: str) -> LawSnaps
     )
 
 
-def evaluate_snapshot(paths: Any, snapshot: LawSnapshot, results: dict[str, Scalar]) -> bool:
+def evaluate_snapshot(paths: Any, snapshot: LawSnapshot, results: JSONObject) -> bool:
     from .cycle import run_environment
 
     with staged_snapshot_environment(paths, snapshot):
@@ -171,7 +173,7 @@ def load_materialized_snapshot(paths: Any) -> LawSnapshot:
     )
 
 
-def validate_live_yin(paths: Any, probe_results: dict[str, Scalar] | None = None) -> YinValidation:
+def validate_live_yin(paths: Any, probe_results: JSONObject | None = None) -> YinValidation:
     probe = {} if probe_results is None else dict(probe_results)
     primary = build_law_snapshot(paths, paths.yin_path, label="live-yin-primary")
     probe_passed = evaluate_snapshot(paths, primary, probe)

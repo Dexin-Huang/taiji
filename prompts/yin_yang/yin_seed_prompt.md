@@ -1,6 +1,7 @@
 Yin seed.
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+You may read {yang_file}, prompt.md, and any generated artifact.
 Preserve exactly two functions: world() and passes(results).
 Use {yin_scratchpad} as private working notes. Keep the assistant response terse.
 

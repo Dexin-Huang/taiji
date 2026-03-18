@@ -20,6 +20,8 @@ Everything else is shared runtime or generated run state.
 
 `yin` defines the world and the law. `yang` searches for a solution inside that world. The runtime executes the cycle, records artifacts, and never invents criteria of its own.
 
+`yang.run()` returns a JSON object. Nested dicts and lists are allowed. `yin.passes(results)` may inspect that full JSON submission and `yang.py` itself.
+
 The architecture is described directly in this README and in the source under `taiji/runtime/`.
 
 ## Layout
@@ -117,6 +119,8 @@ Each active run materializes under `runs/<unit>/current/`:
 - `yang_scratchpad.md`
 - `yin_scratchpad.md`
 - `queue/`
+
+`results.json` is the latest JSON submission from `yang.py`. It may contain nested evidence and artifact paths.
 
 ## Included Units
 

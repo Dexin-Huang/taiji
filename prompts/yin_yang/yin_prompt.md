@@ -1,6 +1,7 @@
 Yin iteration {iteration}.
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+You may read {yang_file} directly. Use both the implementation and the recorded evidence when you critique.
 Preserve exactly two functions: world() and passes(results).
 Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate adaptive refinements, and rejected constraints there. Keep the assistant response terse.
 

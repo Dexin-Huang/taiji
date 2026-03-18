@@ -34,6 +34,24 @@ def passes(results: dict) -> bool:
     return bool(results.get("yang_contract_ok")) and results.get("answer") == 2
 """
 
+YIN_NESTED_PASSING = """def world() -> dict:
+    return {
+        "target": 2,
+    }
+
+
+def passes(results: dict) -> bool:
+    summary = results.get("summary", {})
+    evidence = results.get("evidence", {})
+    return (
+        bool(results.get("yang_contract_ok"))
+        and isinstance(summary, dict)
+        and summary.get("answer") == 2
+        and isinstance(evidence, dict)
+        and evidence.get("retention_scores") == [1.0, 0.75, 0.5]
+    )
+"""
+
 YANG_PASSING = """import json
 from pathlib import Path
 
@@ -45,11 +63,29 @@ def run() -> dict:
     }
 """
 
+YANG_NESTED_PASSING = """import json
+from pathlib import Path
+
+
+def run() -> dict:
+    world = json.loads(Path("world.json").read_text(encoding="utf-8"))
+    return {
+        "summary": {
+            "answer": int(world["target"]),
+        },
+        "evidence": {
+            "retention_scores": [1.0, 0.75, 0.5],
+            "episode_flags": [True, True, False],
+        },
+        "artifacts": {
+            "note": "nested-json-ok",
+        },
+    }
+"""
+
 YANG_BAD_CONTRACT = """def run() -> dict:
     return {
-        "nested": {
-            "bad": True,
-        },
+        "bad": {1, 2, 3},
     }
 """
 
@@ -154,13 +190,32 @@ def run_contract_failure_check() -> dict[str, Any]:
 
         _require(round_record["passed"] is False, "contract violation should not pass")
         _require(results.get("yang_contract_ok") is False, "bad yang result was not normalized as a contract failure")
-        _require("contract violation" in str(results.get("error", "")), "contract failure did not preserve a readable error")
+        _require("unsupported type set" in str(results.get("error", "")), "contract failure did not preserve a readable error")
 
         return {
             "name": "contract_failure",
             "ok": True,
             "passed": round_record["passed"],
             "error": results.get("error"),
+        }
+
+
+def run_nested_submission_check() -> dict[str, Any]:
+    with temporary_unit() as (_, paths):
+        _write_unit(paths, yin_text=YIN_NESTED_PASSING, yang_text=YANG_NESTED_PASSING)
+
+        round_record = run_round(paths)
+        results = json.loads(paths.results_path.read_text(encoding="utf-8"))
+
+        _require(round_record["passed"] is True, "nested JSON submission should pass")
+        _require(results.get("summary", {}).get("answer") == 2, "nested summary was not preserved")
+        _require(results.get("evidence", {}).get("retention_scores") == [1.0, 0.75, 0.5], "nested list evidence was not preserved")
+
+        return {
+            "name": "nested_submission",
+            "ok": True,
+            "passed": round_record["passed"],
+            "result_keys": sorted(results.keys()),
         }
 
 
@@ -292,6 +347,8 @@ def run_selected_checks(selection: str) -> list[dict[str, Any]]:
         checks.append(run_kernel_check())
     if selection in {"all", "contract_failure"}:
         checks.append(run_contract_failure_check())
+    if selection in {"all", "nested_submission"}:
+        checks.append(run_nested_submission_check())
     if selection in {"all", "import_stability"}:
         checks.append(run_import_stability_check())
     if selection in {"all", "fixed_snapshot"}:
@@ -309,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run lightweight taiji smoke checks")
     parser.add_argument(
         "--check",
-        choices=("all", "kernel", "contract_failure", "import_stability", "fixed_snapshot", "adaptive_probe", "unit_config", "ownership"),
+        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "unit_config", "ownership"),
         default="all",
         help="Select which lightweight check to run",
     )

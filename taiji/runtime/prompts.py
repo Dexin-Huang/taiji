@@ -101,6 +101,7 @@ def default_yang_prompt_template() -> str:
     return """Yang iteration {iteration}.
 
 Own only {yang_file} and {yang_scratchpad}. Do not edit {yin_file} or any generated file.
+You may read {yin_file}, {law_file}, {world_file}, {results_file}, and any generated artifact.
 Use {yang_scratchpad} as private working notes. Put intermediate reasoning, candidate ideas, rejected directions, and partial plans there. Keep the assistant response terse.
 Use run_cycle. It is the only authority on pass or fail.
 
@@ -125,6 +126,7 @@ Assume a passing solution exists. Do not spend turns arguing that the task is im
 Prefer deletion over addition. Prefer a shorter mechanism over a longer one. Prefer a simpler invariant over a more baroque one. If two solutions pass, keep the simpler one.
 
 You may use WebFetch and Task when useful, but only in service of a concrete change to {yang_file}. Do not call run_cycle on code you already expect to fail for trivial reasons.
+Return a JSON object from {yang_file}. Nested dicts and lists are allowed. Put bulky traces in artifact files and return their paths.
 
 A loophole that merely exploits passes() will trigger a stricter adaptive revision from yin. The shortest long-run path is an honest solution.
 
@@ -138,6 +140,7 @@ def default_yin_seed_prompt_template() -> str:
     return """Yin seed.
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+You may read {yang_file}, prompt.md, and any generated artifact.
 Preserve exactly two functions: world() and passes(results).
 Use {yin_scratchpad} as private working notes. Keep the assistant response terse.
 
@@ -161,6 +164,7 @@ def default_yin_prompt_template() -> str:
     return """Yin iteration {iteration}.
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+You may read {yang_file} directly. Use both the implementation and the recorded evidence when you critique.
 Preserve exactly two functions: world() and passes(results).
 Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate adaptive refinements, and rejected constraints there. Keep the assistant response terse.
 

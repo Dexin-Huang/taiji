@@ -33,7 +33,9 @@ from .law import (
 )
 from .schema import ROOT, append_ndjson, iso_timestamp_now, resolve_unit_root, write_json
 
-Scalar = str | int | float | bool | None
+JSONScalar = str | int | float | bool | None
+JSONValue = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
+JSONObject = dict[str, JSONValue]
 
 
 @dataclass(frozen=True)
@@ -193,24 +195,31 @@ def ensure_json_object(name: str, raw: Any) -> dict[str, Any]:
     return dict(raw)
 
 
-def validate_flat_results(results: dict[str, Any]) -> None:
-    for key, value in results.items():
-        if not isinstance(key, str):
-            raise RuntimeError("yang results must use string keys")
-        if isinstance(value, (dict, list, tuple, set)):
-            raise RuntimeError(f"yang result {key!r} is not flat")
-        if not isinstance(value, (str, int, float, bool)) and value is not None:
-            raise RuntimeError(f"yang result {key!r} has unsupported type {type(value).__name__}")
+def validate_json_value(name: str, raw: Any) -> None:
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if not isinstance(key, str):
+                raise RuntimeError(f"{name} must use string keys; got {type(key).__name__}")
+            validate_json_value(f"{name}.{key}", value)
+        return
+    if isinstance(raw, list):
+        for index, value in enumerate(raw):
+            validate_json_value(f"{name}[{index}]", value)
+        return
+    if isinstance(raw, (str, int, float, bool)) or raw is None:
+        return
+    raise RuntimeError(f"{name} has unsupported type {type(raw).__name__}")
 
 
-def normalize_results(raw: Any) -> dict[str, Scalar]:
+def normalize_results(raw: Any) -> JSONObject:
     if not isinstance(raw, dict):
         return {
             "error": f"yang returned {type(raw).__name__}, expected dict",
             "yang_contract_ok": False,
         }
     try:
-        validate_flat_results(raw)
+        validate_json_value("yang submission", raw)
+        json.dumps(raw, allow_nan=False)
     except Exception as exc:
         return {
             "error": f"yang contract violation: {exc}",
@@ -226,7 +235,7 @@ def append_history(
     *,
     phase: str,
     world: dict[str, Any],
-    results: dict[str, Any],
+    results: JSONObject,
     passed: bool | None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -252,7 +261,7 @@ def latest_history_entry(paths: DualLoopPaths) -> dict[str, Any] | None:
     return json.loads(lines[-1])
 
 
-def run_yang(paths: DualLoopPaths) -> dict[str, Scalar]:
+def run_yang(paths: DualLoopPaths) -> JSONObject:
     yang = load_callable(paths.yang_path, "run")
     validate_zero_arg_signature(yang, "yang.run()")
     try:
@@ -271,7 +280,7 @@ def run_yin_world(paths: DualLoopPaths) -> dict[str, Any]:
     return build_law_snapshot(paths, paths.yin_path, label="live-yin-world-only").world
 
 
-def run_yin_passes(paths: DualLoopPaths, results: dict[str, Scalar]) -> bool:
+def run_yin_passes(paths: DualLoopPaths, results: JSONObject) -> bool:
     if has_materialized_law(paths):
         snapshot = load_materialized_snapshot(paths)
     else:
@@ -279,7 +288,7 @@ def run_yin_passes(paths: DualLoopPaths, results: dict[str, Scalar]) -> bool:
     return evaluate_snapshot(paths, snapshot, results)
 
 
-def validate_yin(paths: DualLoopPaths, probe_results: dict[str, Scalar] | None = None) -> YinValidation:
+def validate_yin(paths: DualLoopPaths, probe_results: JSONObject | None = None) -> YinValidation:
     validation = validate_live_yin(paths, probe_results)
     materialize_law_snapshot(paths, validation.snapshot)
     return validation
