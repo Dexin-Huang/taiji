@@ -48,6 +48,8 @@ def log_line(log_path: Path, message: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Taiji watch process for the yin/yang loop")
     parser.add_argument("--unit-root", type=Path, required=True, help="Unit root for the yin/yang unit")
+    parser.add_argument("--run-id", type=str, default=None, help="Resume or target a specific run id")
+    parser.add_argument("--new", action="store_true", help="Start a fresh run in a new run folder")
     parser.add_argument("--python-executable", default=sys.executable, help="Python executable used for child restarts")
     parser.add_argument("--stop-path", type=Path, default=None, help="Create this file to stop the supervisor")
     parser.add_argument("--child-pid-path", type=Path, default=None, help="Path that tracks the live loop child pid")
@@ -80,6 +82,8 @@ def build_child_command(args: argparse.Namespace) -> list[str]:
         "taiji.loop",
         "--unit-root",
         str(args.unit_root),
+        "--run-id",
+        args.run_id,
         *DEFAULT_LOOP_ARGS,
         *extra_args,
     ]
@@ -127,7 +131,8 @@ def main() -> None:
     configure_stdio()
     parser = build_parser()
     args = parser.parse_args()
-    paths = dual_loop_paths(args.unit_root)
+    paths = dual_loop_paths(args.unit_root, run_id=args.run_id, create_run=True, new_run=args.new)
+    args.run_id = paths.run_id
     queue_root = paths.queue_root
     queue_root.mkdir(parents=True, exist_ok=True)
 

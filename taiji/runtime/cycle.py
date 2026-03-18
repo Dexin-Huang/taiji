@@ -13,6 +13,7 @@ import importlib.util
 import inspect
 import json
 import os
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,9 @@ JSONObject = dict[str, JSONValue]
 class DualLoopPaths:
     unit_root: Path
     unit_config_path: Path
+    runs_root: Path
+    current_run_path: Path
+    run_id: str
     run_root: Path
     queue_root: Path
     prompt_path: Path
@@ -79,18 +83,105 @@ def run_slug_for_unit(root: Path) -> Path:
     return Path("external") / f"{root.name}-{digest}"
 
 
-def resolve_run_root(root: Path) -> Path:
-    return ROOT / "runs" / run_slug_for_unit(root) / "current"
+def runs_root_for_unit(root: Path) -> Path:
+    return ROOT / "runs" / run_slug_for_unit(root)
 
 
-def dual_loop_paths(unit_root: Path | str) -> DualLoopPaths:
+def current_run_path_for_unit(root: Path) -> Path:
+    return runs_root_for_unit(root) / "current.json"
+
+
+def list_run_ids(root: Path) -> list[str]:
+    runs_root = runs_root_for_unit(root)
+    if not runs_root.exists():
+        return []
+    run_ids = sorted(entry.name for entry in runs_root.iterdir() if entry.is_dir())
+    return run_ids
+
+
+def read_current_run_id(root: Path) -> str | None:
+    current_path = current_run_path_for_unit(root)
+    if current_path.exists():
+        payload = json.loads(current_path.read_text(encoding="utf-8"))
+        run_id = payload.get("run_id")
+        if isinstance(run_id, str) and run_id.strip():
+            return run_id.strip()
+    existing = list_run_ids(root)
+    if "current" in existing:
+        return "current"
+    if existing:
+        return existing[-1]
+    return None
+
+
+def write_current_run_id(root: Path, run_id: str) -> None:
+    write_json(current_run_path_for_unit(root), {
+        "run_id": run_id,
+        "updated_at": iso_timestamp_now(),
+    })
+
+
+def allocate_run_id(root: Path) -> str:
+    runs_root = runs_root_for_unit(root)
+    runs_root.mkdir(parents=True, exist_ok=True)
+    base = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    candidate = base
+    suffix = 2
+    while (runs_root / candidate).exists():
+        candidate = f"{base}-{suffix:02d}"
+        suffix += 1
+    return candidate
+
+
+def resolve_run_id(
+    root: Path,
+    run_id: str | None = None,
+    *,
+    create_run: bool = False,
+    new_run: bool = False,
+) -> str:
+    if run_id and new_run:
+        raise RuntimeError("Use either --run-id or --new, not both.")
+    if new_run:
+        selected = allocate_run_id(root)
+        write_current_run_id(root, selected)
+        return selected
+    if run_id:
+        if create_run:
+            write_current_run_id(root, run_id)
+        return run_id
+    current = read_current_run_id(root)
+    if current is not None:
+        return current
+    if create_run:
+        selected = allocate_run_id(root)
+        write_current_run_id(root, selected)
+        return selected
+    return allocate_run_id(root)
+
+
+def resolve_run_root(root: Path, run_id: str) -> Path:
+    return runs_root_for_unit(root) / run_id
+
+
+def dual_loop_paths(
+    unit_root: Path | str,
+    *,
+    run_id: str | None = None,
+    create_run: bool = False,
+    new_run: bool = False,
+) -> DualLoopPaths:
     root = resolve_unit_root(unit_root)
     config = load_unit_config(root)
-    run_root = resolve_run_root(root)
+    selected_run_id = resolve_run_id(root, run_id, create_run=create_run, new_run=new_run)
+    run_root = resolve_run_root(root, selected_run_id)
     prompt_set = config.prompt_set
     return DualLoopPaths(
         unit_root=root,
         unit_config_path=root / UNIT_CONFIG_NAME,
+        runs_root=runs_root_for_unit(root),
+        current_run_path=current_run_path_for_unit(root),
+        run_id=selected_run_id,
         run_root=run_root,
         queue_root=run_root / "queue",
         prompt_path=root / config.prompt_entry,
@@ -362,6 +453,9 @@ def status(paths: DualLoopPaths) -> dict[str, Any]:
     return {
         "unit_root": str(paths.unit_root),
         "unit_config_path": str(paths.unit_config_path),
+        "runs_root": str(paths.runs_root),
+        "current_run_path": str(paths.current_run_path),
+        "run_id": paths.run_id,
         "run_root": str(paths.run_root),
         "queue_root": str(paths.queue_root),
         "prompt_path": str(paths.prompt_path),
@@ -404,6 +498,12 @@ def prompt_text_from_args(goal: str | None, prompt_file: Path | None) -> str | N
     return goal
 
 
+def add_run_selection_args(parser: argparse.ArgumentParser, *, include_new: bool = True) -> None:
+    parser.add_argument("--run-id", type=str, default=None, help="Resume or target a specific run id")
+    if include_new:
+        parser.add_argument("--new", action="store_true", help="Start a fresh run in a new run folder")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Taiji yin/yang cycle")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -417,11 +517,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     seed_parser = subparsers.add_parser("seed", help="Validate yin and materialize the active world/law snapshot")
     seed_parser.add_argument("--unit-root", type=Path, required=True, help="Unit root")
+    add_run_selection_args(seed_parser)
     round_parser = subparsers.add_parser("round", help="Run one yang round against the materialized law snapshot")
     round_parser.add_argument("--unit-root", type=Path, required=True, help="Unit root")
     round_parser.add_argument("--no-auto-seed", action="store_true", help="Do not seed law automatically if missing")
+    add_run_selection_args(round_parser)
     status_parser = subparsers.add_parser("status", help="Show current generated artifact paths and latest history entry")
     status_parser.add_argument("--unit-root", type=Path, required=True, help="Unit root")
+    add_run_selection_args(status_parser, include_new=False)
     return parser
 
 
@@ -440,11 +543,17 @@ def main() -> None:
         print(json.dumps(payload, indent=2, sort_keys=False))
         return
 
-    paths = dual_loop_paths(args.unit_root)
+    create_run = args.command in {"seed", "round"}
+    paths = dual_loop_paths(
+        args.unit_root,
+        run_id=getattr(args, "run_id", None),
+        create_run=create_run,
+        new_run=getattr(args, "new", False),
+    )
 
     if args.command in {"seed", "round"}:
         bootstrap_unit(paths.unit_root, include_readme=False, require_prompt=True)
-        paths = dual_loop_paths(paths.unit_root)
+        paths = dual_loop_paths(paths.unit_root, run_id=paths.run_id, create_run=True)
 
     if args.command == "seed":
         print(json.dumps(seed(paths), indent=2, sort_keys=False))

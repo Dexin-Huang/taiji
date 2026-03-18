@@ -61,9 +61,9 @@ def configure_stdio() -> None:
 # ---------------------------------------------------------------------------
 
 async def run_loop(args: argparse.Namespace) -> None:
-    paths = dual_loop_paths(args.unit_root)
+    paths = dual_loop_paths(args.unit_root, run_id=args.run_id, create_run=True)
     bootstrap_unit(paths.unit_root, include_readme=False, require_prompt=True)
-    paths = dual_loop_paths(paths.unit_root)
+    paths = dual_loop_paths(paths.unit_root, run_id=args.run_id, create_run=True)
     ensure_run_workspace(paths)
     adaptive_mode = args.mode == "adaptive"
     queue_root = paths.queue_root
@@ -71,7 +71,7 @@ async def run_loop(args: argparse.Namespace) -> None:
     state = load_state(args.state_path)
     sdk = load_claude_agent_sdk()
 
-    slug = session_slug(paths.unit_root, ROOT)
+    slug = session_slug(paths.run_root, ROOT)
     yang_session_name = f"taiji-yang-{slug}"
     yin_session_name = f"taiji-yin-{slug}"
     yang_home = args.yang_claude_home or (queue_root / "yang-claude-home")
@@ -81,6 +81,7 @@ async def run_loop(args: argparse.Namespace) -> None:
     sdk_source = claude_sdk_reference_root() if claude_sdk_reference_root().exists() else "installed package"
     print(f"SDK source: {sdk_source}")
     print(f"Unit root: {paths.unit_root}")
+    print(f"Run id: {paths.run_id}")
     print(f"Mode: {args.mode}")
     print(f"Yang seed: {paths.yang_seed_path}")
     print(f"Yin seed: {paths.yin_seed_path}")
@@ -338,6 +339,8 @@ async def run_loop(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Taiji yin/yang loop")
     parser.add_argument("--unit-root", type=Path, required=True)
+    parser.add_argument("--run-id", type=str, default=None, help="Resume or target a specific run id")
+    parser.add_argument("--new", action="store_true", help="Start a fresh run in a new run folder")
     parser.add_argument(
         "--mode",
         choices=("fixed", "adaptive"),
@@ -367,9 +370,10 @@ def main() -> None:
     configure_stdio()
     parser = build_parser()
     args = parser.parse_args()
+    paths = dual_loop_paths(args.unit_root, run_id=args.run_id, create_run=True, new_run=args.new)
+    args.run_id = paths.run_id
     if args.state_path is None:
-        queue_root = dual_loop_paths(args.unit_root).queue_root
-        args.state_path = queue_root / "loop_state.json"
+        args.state_path = paths.queue_root / "loop_state.json"
     anyio.run(run_loop, args)
 
 

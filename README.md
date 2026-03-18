@@ -10,7 +10,7 @@ Each unit is a tiny authored surface:
 - `unit.toml`
 - optional `README.md`
 
-These are seeds. A run copies `yang.py` and `yin.py` into `runs/.../current/` and edits only the run-local working copies.
+These are seeds. A run copies `yang.py` and `yin.py` into `runs/.../<run_id>/` and edits only the run-local working copies.
 
 ## Model
 
@@ -42,7 +42,8 @@ taiji/
       README.md
   runs/
     <unit>/
-      current/
+      current.json
+      <run_id>/
         yang.py
         yin.py
 ```
@@ -60,7 +61,7 @@ If you prefer, create only `units/my_unit/prompt.md` by hand. On the first `seed
 Run one mechanical seed or round:
 
 ```bash
-python -m taiji.cycle seed --unit-root units/persistent_state_model
+python -m taiji.cycle seed --unit-root units/persistent_state_model --new
 python -m taiji.cycle round --unit-root units/persistent_state_model
 python -m taiji.cycle status --unit-root units/persistent_state_model
 ```
@@ -74,8 +75,14 @@ python -m taiji.smoke
 Run the persistent yin/yang loop:
 
 ```bash
-python -m taiji.loop --unit-root units/persistent_state_model --iterations -1 --resume-yang-session
+python -m taiji.loop --unit-root units/persistent_state_model --new --iterations -1 --resume-yang-session
 ```
+
+Run selection:
+
+- `--new`: create a fresh run id and start from the unit seeds in a new run folder
+- `--run-id <id>`: resume or target a specific existing run folder
+- default behavior: resume the current run for that unit if one exists, otherwise create a new run id
 
 Loop modes:
 
@@ -85,13 +92,13 @@ Loop modes:
 Run the watchdog:
 
 ```bash
-python -m taiji.watch --unit-root units/persistent_state_model
+python -m taiji.watch --unit-root units/persistent_state_model --new
 ```
 
 Stop the watchdog-managed loop:
 
 ```powershell
-New-Item runs\persistent_state_model\current\queue\loop.stop -ItemType File -Force
+New-Item runs\persistent_state_model\<run_id>\queue\loop.stop -ItemType File -Force
 ```
 
 ## Prompt Sets
@@ -108,7 +115,7 @@ A unit can override any of them with:
 
 ## Run Artifacts
 
-Each active run materializes under `runs/<unit>/current/`:
+Each active run materializes under `runs/<unit>/<run_id>/`:
 
 - `yang.py`
 - `yin.py`
@@ -125,7 +132,8 @@ Each active run materializes under `runs/<unit>/current/`:
 - `queue/`
 
 `results.json` is the latest JSON submission from `yang.py`. It may contain nested evidence and artifact paths.
-The `yang.py` and `yin.py` files under `runs/<unit>/current/` are the live working copies for that run. The unit files remain unchanged seeds.
+The `yang.py` and `yin.py` files under `runs/<unit>/<run_id>/` are the live working copies for that run. The unit files remain unchanged seeds.
+`runs/<unit>/current.json` records which run id is currently active.
 
 ## Included Units
 

@@ -13,7 +13,7 @@ from typing import Any, Iterator
 
 from .agents import make_edit_hook
 from .bootstrap import bootstrap_unit
-from .cycle import dual_loop_paths, run_round, seed, status, validate_yin
+from .cycle import dual_loop_paths, ensure_run_workspace, run_round, seed, status, validate_yin
 from .law import has_materialized_law
 from .schema import ROOT
 
@@ -308,6 +308,28 @@ def run_seed_workspace_check() -> dict[str, Any]:
         }
 
 
+def run_run_id_selection_check() -> dict[str, Any]:
+    with temporary_unit() as (unit_root, _):
+        first = dual_loop_paths(unit_root, create_run=True)
+        ensure_run_workspace(first)
+        resumed = dual_loop_paths(unit_root, create_run=True)
+        _require(resumed.run_id == first.run_id, "existing run should be resumed when no --new is requested")
+
+        fresh = dual_loop_paths(unit_root, create_run=True, new_run=True)
+        ensure_run_workspace(fresh)
+        _require(fresh.run_id != first.run_id, "--new should allocate a fresh run id")
+        _require(json.loads(fresh.current_run_path.read_text(encoding="utf-8")).get("run_id") == fresh.run_id, "current run pointer did not update")
+        _require(first.run_root.exists(), "first run root was not materialized")
+        _require(fresh.run_root.exists(), "fresh run root was not materialized")
+
+        return {
+            "name": "run_id_selection",
+            "ok": True,
+            "resumed_run_id": resumed.run_id,
+            "fresh_run_id": fresh.run_id,
+        }
+
+
 def run_unit_config_check() -> dict[str, Any]:
     with temporary_unit() as (unit_root, _):
         (unit_root / "spec.md").write_text(PROMPT_TEXT, encoding="utf-8")
@@ -389,6 +411,8 @@ def run_selected_checks(selection: str) -> list[dict[str, Any]]:
         checks.append(run_adaptive_probe_check())
     if selection in {"all", "seed_workspace"}:
         checks.append(run_seed_workspace_check())
+    if selection in {"all", "run_id_selection"}:
+        checks.append(run_run_id_selection_check())
     if selection in {"all", "unit_config"}:
         checks.append(run_unit_config_check())
     if selection in {"all", "ownership"}:
@@ -400,7 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run lightweight taiji smoke checks")
     parser.add_argument(
         "--check",
-        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "seed_workspace", "unit_config", "ownership"),
+        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "seed_workspace", "run_id_selection", "unit_config", "ownership"),
         default="all",
         help="Select which lightweight check to run",
     )
