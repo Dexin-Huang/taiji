@@ -7,7 +7,7 @@ Each unit is a tiny authored surface:
 - `prompt.md`
 - `yang.py`
 - `yin.py`
-- `unit.yaml`
+- `unit.toml`
 - optional `README.md`
 
 Everything else is shared runtime or generated run state.
@@ -36,7 +36,7 @@ taiji/
       prompt.md
       yang.py
       yin.py
-      unit.yaml
+      unit.toml
       README.md
   runs/
     <unit>/
@@ -51,7 +51,7 @@ Create a new unit from a concept:
 python -m taiji.cycle new my_unit --goal "Develop a self-improving model architecture."
 ```
 
-If you prefer, create only `units/my_unit/prompt.md` by hand. On the first `seed`, `round`, or `loop`, taiji will materialize `unit.yaml`, `yang.py`, and `yin.py` from templates.
+If you prefer, create only `units/my_unit/prompt.md` by hand. On the first `seed`, `round`, or `loop`, taiji will materialize `unit.toml`, `yang.py`, and `yin.py` from templates.
 
 Run one mechanical seed or round:
 
@@ -61,11 +61,22 @@ python -m taiji.cycle round --unit-root units/persistent_state_model
 python -m taiji.cycle status --unit-root units/persistent_state_model
 ```
 
+Run the lightweight kernel smoke checks:
+
+```bash
+python -m taiji.smoke
+```
+
 Run the persistent yin/yang loop:
 
 ```bash
 python -m taiji.loop --unit-root units/persistent_state_model --iterations -1 --resume-yang-session
 ```
+
+Loop modes:
+
+- `--mode adaptive` (default): yin may refine the world and acceptance condition after yang passes.
+- `--mode fixed`: yin seeds once, then stays asleep while yang works against the fixed world and law.
 
 Run the watchdog:
 
@@ -97,6 +108,8 @@ Each active run materializes under `runs/<unit>/current/`:
 
 - `world.json`
 - `law.md`
+- `law_state.json`
+- `yin.snapshot.py`
 - `results.json`
 - `history.ndjson`
 - `ideas.ndjson`

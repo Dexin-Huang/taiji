@@ -26,7 +26,7 @@ Prefer deletion over addition. Prefer a shorter mechanism over a longer one. Pre
 
 You may use WebFetch and Task when useful, but only in service of a concrete change to {yang_file}. Do not call run_cycle on code you already expect to fail for trivial reasons.
 
-A loophole that merely exploits passes() will trigger a stronger ratchet from yin. The shortest long-run path is an honest solution.
+A loophole that merely exploits passes() will trigger a stricter adaptive revision from yin. The shortest long-run path is an honest solution.
 
 Do not reason at length in the assistant response. Keep the response to at most 3 short lines. Put any longer scratch work in {yang_scratchpad}.
 

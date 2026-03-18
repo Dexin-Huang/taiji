@@ -7,7 +7,7 @@ name = "taiji"
 version = "0.1.0"
 description = "Yin/yang architecture search runtime for self-contained research units"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "anyio>=4",
     "torch>=2.5",
@@ -22,3 +22,4 @@ agent = [
 taiji-cycle = "taiji.cycle:main"
 taiji-loop = "taiji.loop:main"
 taiji-watch = "taiji.watch:main"
+taiji-smoke = "taiji.smoke:main"

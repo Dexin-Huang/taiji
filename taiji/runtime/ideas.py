@@ -144,14 +144,15 @@ def record_yin_idea(
     yin_changed: bool,
     world_changed: bool,
     results: dict[str, Any],
+    status: str | None = None,
 ) -> None:
     idea = {
         "id": f"yin-{iteration:06d}",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "agent": "yin",
-        "phase": "ratchet",
+        "phase": "adaptive",
         "iteration": iteration,
-        "status": "applied" if yin_changed or world_changed else "no_change",
+        "status": status or ("applied" if yin_changed or world_changed else "no_change"),
         "summary": summarize_response(response, "Yin reviewed the passing solution."),
         "tags": infer_tags(response, after_text),
         "parent_ids": idea_parent_ids(paths, agent="yin"),

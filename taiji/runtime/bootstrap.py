@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .config import UNIT_CONFIG_NAME, load_unit_config
 from .schema import ROOT
 
 TEMPLATES_ROOT = ROOT / "taiji" / "templates"
@@ -34,15 +35,15 @@ def normalize_prompt_text(text: str) -> str:
     return f"# Goal\n\n{stripped}\n"
 
 
-def default_unit_yaml(unit_name: str) -> str:
+def default_unit_toml(unit_name: str) -> str:
     return (
-        f"name: {unit_name}\n"
-        "kind: yin_yang\n"
-        "prompt_set: yin_yang\n"
-        "entry:\n"
-        "  prompt: prompt.md\n"
-        "  yang: yang.py\n"
-        "  yin: yin.py\n"
+        f'name = "{unit_name}"\n'
+        'kind = "yin_yang"\n'
+        'prompt_set = "yin_yang"\n\n'
+        "[entry]\n"
+        'prompt = "prompt.md"\n'
+        'yang = "yang.py"\n'
+        'yin = "yin.py"\n'
     )
 
 
@@ -54,7 +55,7 @@ def default_readme(unit_name: str) -> str:
         "- `prompt.md`\n"
         "- `yang.py`\n"
         "- `yin.py`\n"
-        "- `unit.yaml`\n"
+        "- `unit.toml`\n"
     )
 
 
@@ -80,10 +81,11 @@ def bootstrap_unit(
     root = Path(unit_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
 
-    prompt_path = root / "prompt.md"
-    unit_yaml_path = root / "unit.yaml"
-    yang_path = root / "yang.py"
-    yin_path = root / "yin.py"
+    unit_config_path = root / UNIT_CONFIG_NAME
+    config = load_unit_config(root)
+    prompt_path = root / config.prompt_entry
+    yang_path = root / config.yang_entry
+    yin_path = root / config.yin_entry
     readme_path = root / "README.md"
 
     if not prompt_path.exists():
@@ -113,7 +115,7 @@ def bootstrap_unit(
         else:
             created.append(rel)
 
-    maybe_write(unit_yaml_path, default_unit_yaml(root.name))
+    maybe_write(unit_config_path, default_unit_toml(root.name))
     maybe_write(yang_path, template_text("yang.py"))
     maybe_write(yin_path, template_text("yin.py"))
     if include_readme:
@@ -124,7 +126,7 @@ def bootstrap_unit(
         "created": created,
         "updated": updated,
         "prompt_path": str(prompt_path),
-        "unit_yaml_path": str(unit_yaml_path),
+        "unit_config_path": str(unit_config_path),
         "yang_path": str(yang_path),
         "yin_path": str(yin_path),
         "readme_path": str(readme_path) if include_readme or readme_path.exists() else None,

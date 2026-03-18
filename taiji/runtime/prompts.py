@@ -126,7 +126,7 @@ Prefer deletion over addition. Prefer a shorter mechanism over a longer one. Pre
 
 You may use WebFetch and Task when useful, but only in service of a concrete change to {yang_file}. Do not call run_cycle on code you already expect to fail for trivial reasons.
 
-A loophole that merely exploits passes() will trigger a stronger ratchet from yin. The shortest long-run path is an honest solution.
+A loophole that merely exploits passes() will trigger a stricter adaptive revision from yin. The shortest long-run path is an honest solution.
 
 Do not reason at length in the assistant response. Keep the response to at most 3 short lines. Put any longer scratch work in {yang_scratchpad}.
 
@@ -162,7 +162,7 @@ def default_yin_prompt_template() -> str:
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
 Preserve exactly two functions: world() and passes(results).
-Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate ratchets, and rejected constraints there. Keep the assistant response terse.
+Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate adaptive refinements, and rejected constraints there. Keep the assistant response terse.
 
 Yang passed. Therefore the current bar is too low.
 

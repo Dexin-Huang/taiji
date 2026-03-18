@@ -2,7 +2,7 @@ Yin iteration {iteration}.
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
 Preserve exactly two functions: world() and passes(results).
-Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate ratchets, and rejected constraints there. Keep the assistant response terse.
+Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate adaptive refinements, and rejected constraints there. Keep the assistant response terse.
 
 Yang passed. Therefore the current bar is too low.
 

@@ -8,7 +8,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .cycle import append_history, run_yang, run_yin_passes
+from .cycle import append_history, run_yang
+from .law import evaluate_snapshot
 from .schema import write_json
 from .prompts import read_text
 
@@ -41,7 +42,7 @@ class DualLoopState:
 class YangCycleState:
     paths: Any
     max_calls: int
-    world: dict[str, Any]
+    law: Any
     artifact_dir: Path | None = None
     calls: int = 0
     last_record: dict[str, Any] | None = None
@@ -53,12 +54,23 @@ class YangCycleState:
             }
         self.calls += 1
         results = run_yang(self.paths)
-        passed = run_yin_passes(self.paths, results)
+        passed = evaluate_snapshot(self.paths, self.law, results)
         record = append_history(
-            self.paths, phase="trial", world=self.world, results=results, passed=passed,
+            self.paths,
+            phase="trial",
+            world=self.law.world,
+            results=results,
+            passed=passed,
+            metadata={"source_hash": self.law.source_hash},
         )
         self.last_record = record
-        payload = {"note": note, "passed": passed, "world": self.world, "results": results}
+        payload = {
+            "note": note,
+            "passed": passed,
+            "world": self.law.world,
+            "results": results,
+            "source_hash": self.law.source_hash,
+        }
         if self.artifact_dir is not None:
             cycle_dir = self.artifact_dir / "run_cycle"
             cycle_dir.mkdir(parents=True, exist_ok=True)

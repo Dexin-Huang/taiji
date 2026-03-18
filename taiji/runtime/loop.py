@@ -3,7 +3,8 @@ Taiji yin/yang loop orchestrator.
 
 This is the main loop that alternates yang (builder) and yin (critic) turns
 using the Claude Agent SDK. Yang edits yang.py and tests via the run_cycle
-MCP tool. When yang passes, yin wakes to raise the bar.
+MCP tool. In adaptive mode yin wakes after a pass; in fixed mode yin seeds
+once and then stays asleep.
 """
 
 from __future__ import annotations
@@ -31,10 +32,10 @@ from .agents import (
     read_text,
     save_state,
     write_iteration_summary,
-    write_text,
 )
-from .cycle import append_history, dual_loop_paths, run_yin_world, validate_yin
+from .cycle import append_history, dual_loop_paths, seed, validate_yin
 from .ideas import record_seed_idea, record_yang_idea, record_yin_idea
+from .law import evaluate_snapshot, has_materialized_law, load_materialized_snapshot
 from .prompts import (
     prompt_context,
     render_system_prompt,
@@ -62,6 +63,8 @@ def configure_stdio() -> None:
 async def run_loop(args: argparse.Namespace) -> None:
     paths = dual_loop_paths(args.unit_root)
     bootstrap_unit(paths.unit_root, include_readme=False, require_prompt=True)
+    paths = dual_loop_paths(paths.unit_root)
+    adaptive_mode = args.mode == "adaptive"
     queue_root = paths.queue_root
     queue_root.mkdir(parents=True, exist_ok=True)
     state = load_state(args.state_path)
@@ -77,12 +80,13 @@ async def run_loop(args: argparse.Namespace) -> None:
     sdk_source = claude_sdk_reference_root() if claude_sdk_reference_root().exists() else "installed package"
     print(f"SDK source: {sdk_source}")
     print(f"Unit root: {paths.unit_root}")
+    print(f"Mode: {args.mode}")
     print(f"Yang file: {paths.yang_path}")
     print(f"Yin file: {paths.yin_path}")
     print(f"State file: {args.state_path}")
 
     # -- Seed phase ----------------------------------------------------------
-    if not paths.law_path.exists():
+    if not has_materialized_law(paths):
         print("Seeding yin first.")
         ensure_text_file(paths.yin_scratchpad_path, "# Yin Scratchpad\n\n")
         seed_dir = artifact_dir(queue_root, "seed")
@@ -117,14 +121,19 @@ async def run_loop(args: argparse.Namespace) -> None:
             session_id=yin_session_name, resumed_session_id=None,
         )
         try:
-            world = validate_yin(paths)
+            seed_record = seed(paths)
         except Exception as exc:
             paths.yin_path.write_text(yin_snapshot, encoding="utf-8")
             raise RuntimeError(f"yin seed failed and was reverted: {type(exc).__name__}: {exc}") from exc
-        seed_record = append_history(paths, phase="seed", world=world, results={}, passed=False)
+        world = seed_record["world"]
         write_json(seed_dir / "world_after.json", world)
         record_seed_idea(paths, ROOT, artifact_dir=seed_dir, response=yin_text, changed=yin_snapshot != yin_after, world=world)
-        write_iteration_summary(seed_dir, {"phase": "seed", "record": seed_record, "yin_changed": yin_snapshot != yin_after})
+        write_iteration_summary(seed_dir, {
+            "phase": "seed",
+            "mode": args.mode,
+            "record": seed_record,
+            "yin_changed": yin_snapshot != yin_after,
+        })
 
     # -- Main loop ------------------------------------------------------------
     target_iteration = None if args.iterations < 0 else state.iteration + args.iterations
@@ -139,9 +148,10 @@ async def run_loop(args: argparse.Namespace) -> None:
         ensure_text_file(paths.yin_scratchpad_path, "# Yin Scratchpad\n\n")
 
         iter_dir = artifact_dir(queue_root, f"iter-{state.iteration:06d}")
-        current_world = run_yin_world(paths)
+        current_law = load_materialized_snapshot(paths)
+        current_world = current_law.world
         write_json(iter_dir / "world_before.json", current_world)
-        cycle_state = YangCycleState(paths=paths, max_calls=args.yang_max_cycle_calls, world=current_world, artifact_dir=iter_dir)
+        cycle_state = YangCycleState(paths=paths, max_calls=args.yang_max_cycle_calls, law=current_law, artifact_dir=iter_dir)
 
         # -- Yang turn -------------------------------------------------------
         @sdk.tool("run_cycle", "Execute the immutable yin/yang cycle once and return world, results, and pass/fail.", {"note": str})
@@ -190,7 +200,10 @@ async def run_loop(args: argparse.Namespace) -> None:
             print("Yang did not call run_cycle. Continuing.")
             write_iteration_summary(iter_dir, {
                 "iteration": state.iteration, "status": "yang-no-run",
-                "world_before": current_world, "yang_session_id": state.yang_session_id,
+                "mode": args.mode,
+                "world_before": current_world,
+                "law_source_hash": current_law.source_hash,
+                "yang_session_id": state.yang_session_id,
             })
             state.last_phase = "yang-no-run"
             state.last_passed = False
@@ -204,15 +217,33 @@ async def run_loop(args: argparse.Namespace) -> None:
         if not bool(record["passed"]):
             write_iteration_summary(iter_dir, {
                 "iteration": state.iteration, "status": "failed",
-                "record": record, "yang_session_id": state.yang_session_id,
+                "mode": args.mode,
+                "record": record,
+                "law_source_hash": current_law.source_hash,
+                "yang_session_id": state.yang_session_id,
             })
             state.last_phase = "round"
             state.last_passed = False
             save_state(args.state_path, state)
             continue
 
-        # -- Yin turn (only after yang passes) --------------------------------
-        print("Yang passed. Waking yin to refine the world or the pass condition.")
+        if not adaptive_mode:
+            print("Yang passed. Fixed mode keeps yin asleep and preserves the active law snapshot.")
+            write_iteration_summary(iter_dir, {
+                "iteration": state.iteration,
+                "status": "passed",
+                "mode": args.mode,
+                "trial_record": record,
+                "law_source_hash": current_law.source_hash,
+                "yang_session_id": state.yang_session_id,
+            })
+            state.last_phase = "fixed"
+            state.last_passed = True
+            save_state(args.state_path, state)
+            break
+
+        # -- Yin turn (adaptive mode only after yang passes) -------------------
+        print("Yang passed. Adaptive mode wakes yin to refine the world or the pass condition.")
         previous_world = record.get("world", {})
         yin_dir = agent_artifact_dir(iter_dir, "yin")
         yin_snapshot = paths.yin_path.read_text(encoding="utf-8")
@@ -235,11 +266,18 @@ async def run_loop(args: argparse.Namespace) -> None:
         if yin_text:
             print(yin_text)
 
+        adaptive_status = "applied"
         try:
-            world = validate_yin(paths, record["results"])
+            validation = validate_yin(paths, record["results"])
+            active_law = validation.snapshot
+            world = active_law.world
+            probe_passed = validation.probe_passed
         except Exception as exc:
             paths.yin_path.write_text(yin_snapshot, encoding="utf-8")
-            world = validate_yin(paths, record["results"])
+            active_law = load_materialized_snapshot(paths)
+            world = active_law.world
+            probe_passed = evaluate_snapshot(paths, active_law, record["results"])
+            adaptive_status = "reverted"
             print(f"Yin edit failed and was reverted: {type(exc).__name__}: {exc}")
 
         yin_after = read_text(paths.yin_path)
@@ -250,28 +288,42 @@ async def run_loop(args: argparse.Namespace) -> None:
         )
         yin_changed = yin_after != yin_snapshot
         world_changed = world != previous_world
-        ratchet_record = append_history(
-            paths, phase="ratchet", world=world, results=record["results"], passed=True,
-            metadata={"yin_changed": yin_changed, "world_changed": world_changed},
+        if adaptive_status != "reverted" and not yin_changed and not world_changed:
+            adaptive_status = "no_change"
+        adaptive_record = append_history(
+            paths,
+            phase="adaptive",
+            world=world,
+            results=record["results"],
+            passed=probe_passed,
+            metadata={
+                "status": adaptive_status,
+                "yin_changed": yin_changed,
+                "world_changed": world_changed,
+                "prior_results_pass_under_current_law": probe_passed,
+                "source_hash": active_law.source_hash,
+            },
         )
         write_json(iter_dir / "world_after.json", world)
         record_yin_idea(
             paths, ROOT, iteration=state.iteration, artifact_dir=iter_dir,
             response=yin_text, after_text=yin_after,
-            yin_changed=yin_changed, world_changed=world_changed, results=record["results"],
+            yin_changed=yin_changed, world_changed=world_changed, results=record["results"], status=adaptive_status,
         )
         write_iteration_summary(iter_dir, {
-            "iteration": state.iteration, "status": "passed",
-            "trial_record": record, "ratchet_record": ratchet_record,
+            "iteration": state.iteration, "status": adaptive_status,
+            "mode": args.mode,
+            "trial_record": record, "adaptive_record": adaptive_record,
+            "law_source_hash": active_law.source_hash,
             "yang_session_id": state.yang_session_id, "yin_session_id": yin_session_name,
         })
-        print(json.dumps(ratchet_record, indent=2, sort_keys=False))
+        print(json.dumps(adaptive_record, indent=2, sort_keys=False))
 
-        state.last_phase = "ratchet"
-        state.last_passed = True
+        state.last_phase = "adaptive"
+        state.last_passed = probe_passed
         save_state(args.state_path, state)
 
-        if args.stop_on_converged and not yin_changed:
+        if args.stop_on_converged and adaptive_status == "no_change":
             print("Stopping because yin did not change the world or acceptance condition.")
             break
 
@@ -283,6 +335,12 @@ async def run_loop(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Taiji yin/yang loop")
     parser.add_argument("--unit-root", type=Path, required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("fixed", "adaptive"),
+        default="adaptive",
+        help="fixed = seed yin once and keep the world/law fixed; adaptive = let yin refine after passing rounds",
+    )
     parser.add_argument("--iterations", type=int, default=1, help="-1 = run until interrupted")
     parser.add_argument("--max-wall-sec", type=int, default=0, help="0 = no limit")
     parser.add_argument("--yang-max-turns", type=int, default=8)
@@ -294,7 +352,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yang-claude-home", type=Path, default=None)
     parser.add_argument("--yin-claude-home", type=Path, default=None)
     parser.add_argument("--resume-yang-session", action="store_true")
-    parser.add_argument("--stop-on-converged", action="store_true")
+    parser.add_argument(
+        "--stop-on-converged",
+        action="store_true",
+        help="adaptive mode only: stop after a passing iteration where yin makes no change",
+    )
     return parser
 
 
