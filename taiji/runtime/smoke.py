@@ -11,10 +11,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from .agents import make_edit_hook
+from .agents import RUN_LIBRARIAN_AGENT_NAME, RUN_LIBRARIAN_AGENT_TOOLS, make_edit_hook, run_librarian_config
 from .bootstrap import bootstrap_unit
-from .cycle import dual_loop_paths, ensure_run_workspace, run_round, seed, status, validate_yin
-from .law import has_materialized_law
+from .cycle import dual_loop_paths, ensure_run_workspace, evaluate_yang_trial, run_round, seed, status, trial_beats, validate_yin
+from .law import has_materialized_law, load_materialized_snapshot
 from .schema import ROOT
 
 
@@ -112,6 +112,62 @@ YIN_OTHER_TARGET = """def world() -> dict:
 
 def passes(results: dict) -> bool:
     return bool(results.get("yang_contract_ok")) and results.get("answer") == 999
+"""
+
+YIN_WITH_SCORE = """def world() -> dict:
+    return {
+        "target": 2,
+    }
+
+
+def passes(results: dict) -> bool:
+    return bool(results.get("yang_contract_ok")) and results.get("summary", {}).get("error") == 0.0
+
+
+def score(results: dict) -> dict:
+    summary = results.get("summary", {})
+    error = float(summary.get("error", 1_000_000.0))
+    size = float(summary.get("size", 1_000_000.0))
+    return {
+        "order": [
+            {"name": "error", "value": error, "direction": "min"},
+            {"name": "size", "value": size, "direction": "min"},
+        ],
+        "summary": {
+            "error": error,
+            "size": size,
+        },
+    }
+"""
+
+YANG_SCORE_BASELINE = """def run() -> dict:
+    return {
+        "summary": {
+            "answer": 2,
+            "error": 5.0,
+            "size": 20.0,
+        }
+    }
+"""
+
+YANG_SCORE_BETTER = """def run() -> dict:
+    return {
+        "summary": {
+            "answer": 2,
+            "error": 3.0,
+            "size": 18.0,
+        }
+    }
+"""
+
+YANG_SCORE_WORSE = """def run() -> dict:
+    return {
+        "summary": {
+            "answer": 2,
+            "error": 7.0,
+            "size": 10.0,
+        }
+    }
 """
 
 
@@ -330,6 +386,50 @@ def run_run_id_selection_check() -> dict[str, Any]:
         }
 
 
+def run_librarian_config_check() -> dict[str, Any]:
+    with temporary_unit() as (_, paths):
+        config = run_librarian_config(paths, ROOT)
+        prompt = str(config["prompt"])
+        _require(config["name"] == RUN_LIBRARIAN_AGENT_NAME, "librarian agent name changed unexpectedly")
+        _require(config["tools"] == RUN_LIBRARIAN_AGENT_TOOLS, "librarian tools should stay read-only")
+        _require("Treat every invocation as stateless." in prompt, "librarian prompt lost the statelessness rule")
+        _require(relative_artifact_fragment(paths.run_root) in prompt, "librarian prompt should mention the active run root")
+        _require(relative_artifact_fragment(paths.ideas_path) in prompt, "librarian prompt should mention ideas.ndjson")
+        _require(relative_artifact_fragment(paths.frontier_path) in prompt, "librarian prompt should mention frontier.json")
+        return {
+            "name": "librarian_config",
+            "ok": True,
+            "agent_name": config["name"],
+            "tools": config["tools"],
+        }
+
+
+def run_score_comparator_check() -> dict[str, Any]:
+    with temporary_unit() as (_, paths):
+        _write_unit(paths, yin_text=YIN_WITH_SCORE, yang_text=YANG_SCORE_BASELINE)
+        seed(paths)
+        snapshot = load_materialized_snapshot(paths)
+
+        baseline = evaluate_yang_trial(paths, snapshot, persist_results=False, persist_history=False, phase="baseline")
+        _require(baseline["score"]["summary"]["error"] == 5.0, "baseline score was not recorded")
+
+        paths.yang_path.write_text(YANG_SCORE_BETTER, encoding="utf-8")
+        better = evaluate_yang_trial(paths, snapshot, persist_results=False, persist_history=False, phase="trial")
+        _require(trial_beats(better, baseline), "better ordered score should beat the baseline")
+
+        paths.yang_path.write_text(YANG_SCORE_WORSE, encoding="utf-8")
+        worse = evaluate_yang_trial(paths, snapshot, persist_results=False, persist_history=False, phase="trial")
+        _require(not trial_beats(worse, baseline), "worse ordered score should not beat the baseline")
+
+        return {
+            "name": "score_comparator",
+            "ok": True,
+            "baseline_score": baseline["score"],
+            "better_score": better["score"],
+            "worse_score": worse["score"],
+        }
+
+
 def run_unit_config_check() -> dict[str, Any]:
     with temporary_unit() as (unit_root, _):
         (unit_root / "spec.md").write_text(PROMPT_TEXT, encoding="utf-8")
@@ -395,6 +495,10 @@ def run_ownership_check() -> dict[str, Any]:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def relative_artifact_fragment(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
+
+
 def run_selected_checks(selection: str) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     if selection in {"all", "kernel"}:
@@ -413,6 +517,10 @@ def run_selected_checks(selection: str) -> list[dict[str, Any]]:
         checks.append(run_seed_workspace_check())
     if selection in {"all", "run_id_selection"}:
         checks.append(run_run_id_selection_check())
+    if selection in {"all", "librarian_config"}:
+        checks.append(run_librarian_config_check())
+    if selection in {"all", "score_comparator"}:
+        checks.append(run_score_comparator_check())
     if selection in {"all", "unit_config"}:
         checks.append(run_unit_config_check())
     if selection in {"all", "ownership"}:
@@ -424,7 +532,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run lightweight taiji smoke checks")
     parser.add_argument(
         "--check",
-        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "seed_workspace", "run_id_selection", "unit_config", "ownership"),
+        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "seed_workspace", "run_id_selection", "librarian_config", "score_comparator", "unit_config", "ownership"),
         default="all",
         help="Select which lightweight check to run",
     )

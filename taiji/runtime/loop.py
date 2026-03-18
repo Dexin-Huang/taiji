@@ -22,6 +22,7 @@ from .bootstrap import bootstrap_unit
 from .agents import (
     DEFAULT_AGENT_TOOLS,
     DualLoopState,
+    RUN_LIBRARIAN_AGENT_NAME,
     YangCycleState,
     agent_artifact_dir,
     artifact_dir,
@@ -29,13 +30,14 @@ from .agents import (
     ensure_text_file,
     finish_agent_turn_logging,
     load_state,
+    make_run_librarian_definition,
     read_text,
     save_state,
     write_iteration_summary,
 )
-from .cycle import append_history, dual_loop_paths, ensure_run_workspace, seed, validate_yin
+from .cycle import append_history, dual_loop_paths, ensure_run_workspace, evaluate_yang_trial, seed, validate_yin
 from .ideas import record_seed_idea, record_yang_idea, record_yin_idea
-from .law import evaluate_snapshot, has_materialized_law, load_materialized_snapshot
+from .law import evaluate_snapshot, has_materialized_law, load_materialized_snapshot, score_snapshot
 from .prompts import (
     prompt_context,
     render_system_prompt,
@@ -54,6 +56,47 @@ def configure_stdio() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if callable(reconfigure):
             reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+def baseline_record_from_state(state: DualLoopState, *, source_hash: str) -> dict[str, Any] | None:
+    if state.yang_kept_source_hash != source_hash:
+        return None
+    if state.yang_kept_passed is None:
+        return None
+    return {
+        "passed": bool(state.yang_kept_passed),
+        "score": state.yang_kept_score or {"order": [], "summary": {}},
+        "source_hash": source_hash,
+    }
+
+
+def update_kept_state_from_record(state: DualLoopState, record: dict[str, Any], *, source_hash: str) -> None:
+    state.yang_kept_passed = bool(record.get("passed"))
+    state.yang_kept_score = dict(record.get("score", {"order": [], "summary": {}}))
+    state.yang_kept_source_hash = source_hash
+
+
+def ensure_yang_baseline(paths: Any, current_law: Any, state: DualLoopState) -> dict[str, Any]:
+    baseline = baseline_record_from_state(state, source_hash=current_law.source_hash)
+    if baseline is not None:
+        return baseline
+    baseline = evaluate_yang_trial(
+        paths,
+        current_law,
+        persist_results=False,
+        persist_history=False,
+        phase="baseline",
+    )
+    update_kept_state_from_record(state, baseline, source_hash=current_law.source_hash)
+    return baseline
+
+
+def restore_results_file(paths: Any, previous_text: str | None) -> None:
+    if previous_text is None:
+        paths.results_path.unlink(missing_ok=True)
+        return
+    paths.results_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.results_path.write_text(previous_text, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +198,14 @@ async def run_loop(args: argparse.Namespace) -> None:
         current_law = load_materialized_snapshot(paths)
         current_world = current_law.world
         write_json(iter_dir / "world_before.json", current_world)
-        cycle_state = YangCycleState(paths=paths, max_calls=args.yang_max_cycle_calls, law=current_law, artifact_dir=iter_dir)
+        baseline = ensure_yang_baseline(paths, current_law, state)
+        cycle_state = YangCycleState(
+            paths=paths,
+            max_calls=args.yang_max_cycle_calls,
+            law=current_law,
+            artifact_dir=iter_dir,
+            baseline_record=baseline,
+        )
 
         # -- Yang turn -------------------------------------------------------
         @sdk.tool("run_cycle", "Execute the immutable yin/yang cycle once and return world, results, and pass/fail.", {"note": str})
@@ -166,14 +216,19 @@ async def run_loop(args: argparse.Namespace) -> None:
         server = sdk.create_sdk_mcp_server(name="taiji", tools=[run_cycle_tool])
         yang_dir = agent_artifact_dir(iter_dir, "yang")
         yang_before = read_text(paths.yang_path)
+        results_before = read_text(paths.results_path) if paths.results_path.exists() else None
         ctx = prompt_context(paths, ROOT, iteration=state.iteration)
         yang_prompt = yang_turn_prompt(paths, ROOT, state.iteration)
         yang_sys = render_system_prompt(paths.yang_system_prompt_path, "You are yang. Own {yang_file} and nothing else.", ctx)
+        yang_agents = {
+            RUN_LIBRARIAN_AGENT_NAME: make_run_librarian_definition(sdk, paths, ROOT),
+        }
+        resumed_yang_session_id = state.yang_session_id if args.resume_yang_session else None
         begin_agent_turn_logging(
             agent_dir=yang_dir, file_label="yang",
             prompt=yang_prompt, system_prompt=yang_sys,
             before_text=yang_before,
-            resumed_session_id=state.yang_session_id if args.resume_yang_session else None,
+            resumed_session_id=resumed_yang_session_id,
         )
         yang_session_id, yang_text = await run_agent_turn(
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
@@ -181,48 +236,116 @@ async def run_loop(args: argparse.Namespace) -> None:
             prompt=yang_prompt, system_prompt=yang_sys,
             max_turns=args.yang_max_turns, cli_path=args.cli_path,
             claude_model=args.claude_model, claude_home=yang_home,
-            resume_session_id=state.yang_session_id if args.resume_yang_session else None,
+            resume_session_id=resumed_yang_session_id,
             session_id=yang_session_name,
             mcp_servers={"taiji": server},
             tools=DEFAULT_AGENT_TOOLS,
             allowed_tools=[*DEFAULT_AGENT_TOOLS, "mcp__taiji__run_cycle"],
+            agents=yang_agents,
         )
         if yang_text:
             print(yang_text)
+        yang_turn_end = read_text(paths.yang_path)
+        if yang_session_id is not None:
+            state.yang_session_id = yang_session_id
+
+        keep_decision: dict[str, Any]
+        active_record = baseline
+        kept_new_candidate = cycle_state.best_record is not None
+        attempt_record = cycle_state.best_record if cycle_state.best_record is not None else cycle_state.last_record
+        attempted_yang_text = cycle_state.best_yang_text if cycle_state.best_record is not None else yang_turn_end
+        if kept_new_candidate:
+            assert cycle_state.best_record is not None
+            assert cycle_state.best_yang_text is not None
+            paths.yang_path.write_text(cycle_state.best_yang_text, encoding="utf-8")
+            write_json(paths.results_path, cycle_state.best_record["results"])
+            active_record = cycle_state.best_record
+            update_kept_state_from_record(state, active_record, source_hash=current_law.source_hash)
+            keep_decision = {
+                "action": "keep",
+                "reason": "passed" if bool(active_record["passed"]) else "score-improved",
+                "baseline": baseline,
+                "active": active_record,
+            }
+        else:
+            paths.yang_path.write_text(yang_before, encoding="utf-8")
+            restore_results_file(paths, results_before)
+            keep_decision = {
+                "action": "discard",
+                "reason": "no-run" if cycle_state.last_record is None else "no-improvement",
+                "baseline": baseline,
+                "active": baseline,
+            }
+
         yang_after = read_text(paths.yang_path)
         finish_agent_turn_logging(
             agent_dir=yang_dir, file_label="yang",
             response=yang_text, before_text=yang_before, after_text=yang_after,
             session_id=yang_session_id or yang_session_name,
-            resumed_session_id=state.yang_session_id if args.resume_yang_session else None,
+            resumed_session_id=resumed_yang_session_id,
         )
-        if yang_session_id is not None:
-            state.yang_session_id = yang_session_id
 
-        record = cycle_state.last_record
-        if record is None:
+        if attempt_record is not None:
+            print(json.dumps(attempt_record, indent=2, sort_keys=False))
+            write_json(iter_dir / "results.json", attempt_record["results"])
+            record_yang_idea(
+                paths,
+                ROOT,
+                iteration=state.iteration,
+                artifact_dir=iter_dir,
+                response=yang_text,
+                after_text=attempted_yang_text,
+                record=attempt_record,
+                selection=keep_decision,
+            )
+
+        if cycle_state.last_record is None:
             print("Yang did not call run_cycle. Continuing.")
             write_iteration_summary(iter_dir, {
-                "iteration": state.iteration, "status": "yang-no-run",
+                "iteration": state.iteration,
+                "status": "yang-no-run",
                 "mode": args.mode,
                 "world_before": current_world,
                 "law_source_hash": current_law.source_hash,
                 "yang_session_id": state.yang_session_id,
+                "attempt_record": None,
+                "kept_record": active_record,
+                "keep_decision": keep_decision,
             })
             state.last_phase = "yang-no-run"
-            state.last_passed = False
+            state.last_passed = bool(active_record["passed"])
             save_state(args.state_path, state)
             continue
 
-        print(json.dumps(record, indent=2, sort_keys=False))
-        write_json(iter_dir / "results.json", record["results"])
-        record_yang_idea(paths, ROOT, iteration=state.iteration, artifact_dir=iter_dir, response=yang_text, after_text=yang_after, record=record)
+        if not kept_new_candidate:
+            summary_status = "already-passing" if bool(active_record["passed"]) else "failed"
+            write_iteration_summary(iter_dir, {
+                "iteration": state.iteration,
+                "status": summary_status,
+                "mode": args.mode,
+                "attempt_record": attempt_record,
+                "kept_record": active_record,
+                "keep_decision": keep_decision,
+                "law_source_hash": current_law.source_hash,
+                "yang_session_id": state.yang_session_id,
+            })
+            state.last_phase = "round"
+            state.last_passed = bool(active_record["passed"])
+            save_state(args.state_path, state)
+            if bool(active_record["passed"]) and not adaptive_mode:
+                print("Active yang already passes current law. Fixed mode stops here.")
+                break
+            continue
+
+        record = active_record
 
         if not bool(record["passed"]):
             write_iteration_summary(iter_dir, {
                 "iteration": state.iteration, "status": "failed",
                 "mode": args.mode,
-                "record": record,
+                "attempt_record": attempt_record,
+                "kept_record": record,
+                "keep_decision": keep_decision,
                 "law_source_hash": current_law.source_hash,
                 "yang_session_id": state.yang_session_id,
             })
@@ -238,6 +361,9 @@ async def run_loop(args: argparse.Namespace) -> None:
                 "status": "passed",
                 "mode": args.mode,
                 "trial_record": record,
+                "attempt_record": attempt_record,
+                "kept_record": record,
+                "keep_decision": keep_decision,
                 "law_source_hash": current_law.source_hash,
                 "yang_session_id": state.yang_session_id,
             })
@@ -276,11 +402,13 @@ async def run_loop(args: argparse.Namespace) -> None:
             active_law = validation.snapshot
             world = active_law.world
             probe_passed = validation.probe_passed
+            probe_score = validation.probe_score
         except Exception as exc:
             paths.yin_path.write_text(yin_snapshot, encoding="utf-8")
             active_law = load_materialized_snapshot(paths)
             world = active_law.world
             probe_passed = evaluate_snapshot(paths, active_law, record["results"])
+            probe_score = score_snapshot(paths, active_law, record["results"])
             adaptive_status = "reverted"
             print(f"Yin edit failed and was reverted: {type(exc).__name__}: {exc}")
 
@@ -300,6 +428,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             world=world,
             results=record["results"],
             passed=probe_passed,
+            score=probe_score.to_json(),
             metadata={
                 "status": adaptive_status,
                 "yin_changed": yin_changed,
@@ -317,7 +446,11 @@ async def run_loop(args: argparse.Namespace) -> None:
         write_iteration_summary(iter_dir, {
             "iteration": state.iteration, "status": adaptive_status,
             "mode": args.mode,
-            "trial_record": record, "adaptive_record": adaptive_record,
+            "trial_record": record,
+            "attempt_record": attempt_record,
+            "kept_record": record,
+            "keep_decision": keep_decision,
+            "adaptive_record": adaptive_record,
             "law_source_hash": active_law.source_hash,
             "yang_session_id": state.yang_session_id, "yin_session_id": yin_session_name,
         })
@@ -325,6 +458,11 @@ async def run_loop(args: argparse.Namespace) -> None:
 
         state.last_phase = "adaptive"
         state.last_passed = probe_passed
+        update_kept_state_from_record(
+            state,
+            {"passed": probe_passed, "score": probe_score.to_json()},
+            source_hash=active_law.source_hash,
+        )
         save_state(args.state_path, state)
 
         if args.stop_on_converged and adaptive_status == "no_change":

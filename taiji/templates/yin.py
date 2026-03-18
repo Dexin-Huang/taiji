@@ -19,3 +19,26 @@ def passes(results: dict) -> bool:
     If yang passes too easily, wake and rewrite world() and/or passes(results).
     """
     return False
+
+
+def score(results: dict) -> dict:
+    """
+    Optional public progress comparator for failed yang attempts.
+
+    Return:
+        {
+            "order": [
+                {"name": "metric_name", "value": 1.23, "direction": "min"},
+            ],
+            "summary": {
+                "metric_name": 1.23,
+            },
+        }
+
+    The host compares `order` lexicographically under the frozen law snapshot.
+    Keep it aligned with passes(results). Use it only to say which failure is closer.
+    """
+    return {
+        "order": [],
+        "summary": {},
+    }

@@ -15,12 +15,13 @@ These are seeds. A run copies `yang.py` and `yin.py` into `runs/.../<run_id>/` a
 ## Model
 
 - `yang` owns `run() -> dict`
-- `yin` owns `world() -> dict` and `passes(results) -> bool`
+- `yin` owns `world() -> dict`, `passes(results) -> bool`, and optional `score(results) -> dict`
 - the runtime is mechanical
 
 `yin` defines the world and the law. `yang` searches for a solution inside that world. The runtime executes the cycle, records artifacts, and never invents criteria of its own.
 
 `yang.run()` returns a JSON object. Nested dicts and lists are allowed. `yin.passes(results)` may inspect that full JSON submission and `yang.py` itself.
+If `yin.score(results)` is defined, the host uses it mechanically as a public keep/discard comparator among failing yang attempts under the frozen law snapshot.
 
 The architecture is described directly in this README and in the source under `taiji/runtime/`.
 
@@ -143,6 +144,8 @@ The `yang.py` and `yin.py` files under `runs/<unit>/<run_id>/` are the live work
 ## Notes
 
 - `taiji.loop` exposes `WebFetch` and `Task` to both agents by default.
+- Yang also gets a named read-only `run_librarian` custom agent via `Task`. It is scoped to the active run and instructed to behave statelessly across calls.
+- Yang is selected harshly: the run keeps a new `yang.py` only when it beats the active candidate under the current frozen law. Otherwise the turn is discarded and the previous working copy is restored.
 - Single-file ownership is enforced through edit hooks.
 - Generated state stays out of `units/` so authored source remains clean.
 - `taiji.loop` and `taiji.watch` require the Claude Agent SDK. Install the optional dependency with `pip install .[agent]`, or keep a local clone at `references/claude-agent-sdk-python`.

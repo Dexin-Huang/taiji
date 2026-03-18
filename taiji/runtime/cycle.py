@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import inspect
 import json
 import os
 import time
+import types
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,10 +25,13 @@ from .law import (
     LawSnapshot,
     YinValidation,
     build_law_snapshot,
+    compare_scorecards,
     evaluate_snapshot,
     has_materialized_law,
     load_materialized_snapshot,
     materialize_law_snapshot,
+    score_snapshot,
+    scorecard_from_json,
     validate_live_yin,
     write_law,
 )
@@ -252,11 +255,10 @@ def load_module(path: Path, *, label: str) -> Any:
     source = path.read_text(encoding="utf-8")
     fingerprint = hashlib.sha256(f"{path.resolve()}::{label}::{source}".encode("utf-8")).hexdigest()
     module_name = f"taiji_{path.stem}_{fingerprint}"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = types.ModuleType(module_name)
+    module.__file__ = str(path)
+    code = compile(source, str(path), "exec")
+    exec(code, module.__dict__)
     return module
 
 
@@ -349,6 +351,7 @@ def append_history(
     world: dict[str, Any],
     results: JSONObject,
     passed: bool | None,
+    score: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = {
@@ -358,6 +361,8 @@ def append_history(
         "results": results,
         "passed": passed,
     }
+    if score is not None:
+        record["score"] = score
     if metadata:
         record.update(metadata)
     append_ndjson(paths.history_path, record)
@@ -373,7 +378,7 @@ def latest_history_entry(paths: DualLoopPaths) -> dict[str, Any] | None:
     return json.loads(lines[-1])
 
 
-def run_yang(paths: DualLoopPaths) -> JSONObject:
+def run_yang(paths: DualLoopPaths, *, persist_results: bool = True) -> JSONObject:
     ensure_run_workspace(paths)
     yang = load_callable(paths.yang_path, "run")
     validate_zero_arg_signature(yang, "yang.run()")
@@ -383,8 +388,54 @@ def run_yang(paths: DualLoopPaths) -> JSONObject:
     except Exception as exc:
         raw_results = {"error": f"yang crashed: {type(exc).__name__}: {exc}"}
     results = normalize_results(raw_results)
-    write_json(paths.results_path, results)
+    if persist_results:
+        write_json(paths.results_path, results)
     return results
+
+
+def evaluate_yang_trial(
+    paths: DualLoopPaths,
+    snapshot: LawSnapshot,
+    *,
+    persist_results: bool = True,
+    persist_history: bool = False,
+    phase: str = "trial",
+) -> dict[str, Any]:
+    results = run_yang(paths, persist_results=persist_results)
+    passed = evaluate_snapshot(paths, snapshot, results)
+    score = score_snapshot(paths, snapshot, results).to_json()
+    record = {
+        "timestamp": iso_timestamp_now(),
+        "phase": phase,
+        "world": snapshot.world,
+        "results": results,
+        "passed": passed,
+        "score": score,
+        "source_hash": snapshot.source_hash,
+    }
+    if persist_history:
+        append_history(
+            paths,
+            phase=phase,
+            world=snapshot.world,
+            results=results,
+            passed=passed,
+            score=score,
+            metadata={"source_hash": snapshot.source_hash},
+        )
+    return record
+
+
+def trial_beats(candidate: dict[str, Any], baseline: dict[str, Any] | None) -> bool:
+    if baseline is None:
+        return bool(candidate.get("passed"))
+    candidate_passed = bool(candidate.get("passed"))
+    baseline_passed = bool(baseline.get("passed"))
+    if candidate_passed != baseline_passed:
+        return candidate_passed
+    candidate_score = scorecard_from_json(candidate.get("score", {}))
+    baseline_score = scorecard_from_json(baseline.get("score", {}))
+    return compare_scorecards(candidate_score, baseline_score) > 0
 
 
 def run_yin_world(paths: DualLoopPaths) -> dict[str, Any]:
@@ -418,6 +469,7 @@ def seed(paths: DualLoopPaths) -> dict[str, Any]:
         world=validation.snapshot.world,
         results={},
         passed=None,
+        score=validation.probe_score.to_json(),
         metadata={
             "status": "materialized",
             "source_hash": validation.snapshot.source_hash,
@@ -432,8 +484,9 @@ def run_round(paths: DualLoopPaths, *, auto_seed: bool = True) -> dict[str, Any]
         seed(paths)
 
     snapshot = load_materialized_snapshot(paths)
-    results = run_yang(paths)
-    passed = evaluate_snapshot(paths, snapshot, results)
+    record = evaluate_yang_trial(paths, snapshot, persist_results=True, persist_history=False, phase="round")
+    results = record["results"]
+    passed = bool(record["passed"])
     write_law(paths, snapshot, passed)
     return append_history(
         paths,
@@ -441,6 +494,7 @@ def run_round(paths: DualLoopPaths, *, auto_seed: bool = True) -> dict[str, Any]
         world=snapshot.world,
         results=results,
         passed=passed,
+        score=record["score"],
         metadata={
             "status": "evaluated",
             "source_hash": snapshot.source_hash,

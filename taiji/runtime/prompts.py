@@ -78,6 +78,8 @@ def prompt_context(paths: Any, root: Path, *, iteration: int | None = None) -> d
         "law_file": relative_artifact_path(paths.law_path, root),
         "results_file": relative_artifact_path(paths.results_path, root),
         "history_file": relative_artifact_path(paths.history_path, root),
+        "ideas_file": relative_artifact_path(paths.ideas_path, root),
+        "frontier_file": relative_artifact_path(paths.frontier_path, root),
         "unit_root": relative_artifact_path(paths.unit_root, root),
         "run_root": relative_artifact_path(paths.run_root, root),
     }
@@ -108,6 +110,7 @@ Use run_cycle. It is the only authority on pass or fail.
 If run_cycle returns passed=false, revise {yang_file} and run again.
 If run_cycle returns passed=true, stop immediately.
 If you hit the run_cycle call limit for this turn, summarize briefly and wait to be resumed.
+Only a change that beats the current active candidate under the frozen law will be kept. Regressions are discarded mechanically.
 
 Goal:
 {goal}
@@ -126,6 +129,7 @@ Assume a passing solution exists. Do not spend turns arguing that the task is im
 Prefer deletion over addition. Prefer a shorter mechanism over a longer one. Prefer a simpler invariant over a more baroque one. If two solutions pass, keep the simpler one.
 
 You may use WebFetch and Task when useful, but only in service of a concrete change to {yang_file}. Do not call run_cycle on code you already expect to fail for trivial reasons.
+If you need prior run memory, use Task with the `run_librarian` agent for one concrete retrieval question. Treat it as stateless: it rereads files fresh each time and should return only a compact answer plus paths.
 Return a JSON object from {yang_file}. Nested dicts and lists are allowed. Put bulky traces in artifact files and return their paths.
 
 A loophole that merely exploits passes() will trigger a stricter adaptive revision from yin. The shortest long-run path is an honest solution.
@@ -141,7 +145,7 @@ def default_yin_seed_prompt_template() -> str:
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
 You may read {yang_file}, prompt.md, and any generated artifact.
-Preserve exactly two functions: world() and passes(results).
+Preserve world(), passes(results), and optional score(results).
 Use {yin_scratchpad} as private working notes. Keep the assistant response terse.
 
 Goal:
@@ -149,11 +153,13 @@ Goal:
 
 Assume the goal is achievable in principle. Your task is not to dismiss it. Your task is to define the smallest executable world in which the goal has a real optimum.
 
-Identify the formal limit for this domain if one exists. If no closed-form bound exists, define the sharpest operational ideal this world can measure. Encode that ideal through world() and passes(results). Do not write a manifesto.
+Identify the formal limit for this domain if one exists. If no closed-form bound exists, define the sharpest operational ideal this world can measure. Encode that ideal through world(), passes(results), and score(results) when useful. Do not write a manifesto.
 
 world() must specify a concrete environment, concrete metrics, and concrete resource limits. A run in this world must have an unambiguous outcome.
 
 passes(results) must reject toys. Before you finalize it, identify at least three ways a toy could satisfy the letter of the goal while violating its substance. Encode defenses against all three.
+
+If you define score(results), keep it public and mechanical. Return a dict with an ordered list of metrics under `order`, where each item has `name`, `value`, and `direction` (`min` or `max`). The host uses it only to keep or discard failing yang attempts under the frozen law.
 
 Start strict. The first yang attempt should fail unless it captures the real structure of the task.
 Keep the assistant response to at most 3 short lines. Put longer scratch work in {yin_scratchpad}.
@@ -165,7 +171,7 @@ def default_yin_prompt_template() -> str:
 
 Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
 You may read {yang_file} directly. Use both the implementation and the recorded evidence when you critique.
-Preserve exactly two functions: world() and passes(results).
+Preserve world(), passes(results), and optional score(results).
 Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate adaptive refinements, and rejected constraints there. Keep the assistant response terse.
 
 Yang passed. Therefore the current bar is too low.
@@ -189,10 +195,33 @@ Assume the goal is achievable in principle. Do not argue that it is impossible. 
 
 Then identify the loophole yang used: the cheapest reason passed=true while the artifact is still materially below that limit. Close exactly one gap.
 
-Old constraints stay. Add or tighten one orthogonal condition. The feasible set may shrink, but it must not jump to a different task. If the missing condition is not measurable in the current world, change world() first and encode the new requirement in passes(results).
+Old constraints stay. Add or tighten one orthogonal condition. The feasible set may shrink, but it must not jump to a different task. If the missing condition is not measurable in the current world, change world() first and encode the new requirement in passes(results). If score(results) exists, keep it aligned with the public law and use it only as an ordered progress comparator, not as a hidden second task.
 
 Do not add decorative constraints. Add the smallest strict condition that removes the current loophole.
 Do not reason at length in the assistant response. Keep the response to at most 3 short lines. Put any longer scratch work in {yin_scratchpad}.
+""".strip()
+
+
+# ---------------------------------------------------------------------------
+# Custom subagent prompts
+# ---------------------------------------------------------------------------
+
+def default_run_librarian_prompt_template() -> str:
+    return """You are `run_librarian`, a read-only retrieval helper for one taiji run.
+
+Treat every invocation as stateless. Do not rely on memory from prior subagent calls, prior sessions, or other runs. Read files fresh every time.
+
+Stay scoped to this run:
+- run root: {run_root}
+- history: {history_file}
+- ideas: {ideas_file}
+- frontier: {frontier_file}
+
+You may inspect files under {run_root} and, when explicitly relevant, the seed files under {unit_root}. Do not search unrelated runs unless the caller asks for a direct comparison.
+
+Answer one concrete retrieval question at a time. Return at most 5 short bullets plus relevant file paths. Summarize; do not dump large file contents.
+
+You are read-only. Never propose edits. Never call Task. Use only read/search tools.
 """.strip()
 
 
@@ -221,6 +250,12 @@ def yin_turn_prompt(paths: Any, root: Path, iteration: int) -> str:
         paths.yin_prompt_path,
         default_yin_prompt_template(),
         prompt_context(paths, root, iteration=iteration),
+    )
+
+
+def run_librarian_prompt(paths: Any, root: Path) -> str:
+    return default_run_librarian_prompt_template().format_map(
+        SafePromptDict(prompt_context(paths, root)),
     )
 
 

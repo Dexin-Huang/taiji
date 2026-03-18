@@ -71,7 +71,11 @@ def materialize_frontier(paths: Any) -> None:
     latest = records[-1] if records else None
     latest_yang = next((r for r in reversed(records) if r.get("agent") == "yang"), None)
     latest_yin = next((r for r in reversed(records) if r.get("agent") == "yin"), None)
-    failed_yang = [r for r in records if r.get("agent") == "yang" and r.get("status") == "failed"]
+    failed_yang = [
+        r
+        for r in records
+        if r.get("agent") == "yang" and r.get("status") in {"failed", "discarded"}
+    ]
     tag_counts = Counter(tag for r in records for tag in r.get("tags", []))
     write_json(paths.frontier_path, {
         "latest": compact_idea_record(latest) if latest else None,
@@ -113,21 +117,29 @@ def record_yang_idea(
     response: str,
     after_text: str,
     record: dict[str, Any],
+    selection: dict[str, Any] | None = None,
 ) -> None:
     passed = bool(record.get("passed"))
+    selection_action = None if selection is None else selection.get("action")
+    if selection_action == "discard":
+        status = "discarded"
+    else:
+        status = "passed" if passed else "failed"
     idea = {
         "id": f"yang-{iteration:06d}",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "agent": "yang",
         "phase": "trial",
         "iteration": iteration,
-        "status": "passed" if passed else "failed",
+        "status": status,
         "summary": summarize_response(response, "Yang ran a trial."),
         "tags": infer_tags(response, after_text),
         "parent_ids": idea_parent_ids(paths, agent="yang"),
         "artifact_dir": relative_artifact_path(artifact_dir, root),
         "passed": passed,
         "results": record.get("results", {}),
+        "selection_action": selection_action,
+        "selection_reason": None if selection is None else selection.get("reason"),
     }
     append_idea_record(paths, idea)
     materialize_frontier(paths)

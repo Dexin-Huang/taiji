@@ -8,10 +8,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .cycle import append_history, run_yang
-from .law import evaluate_snapshot
+from .cycle import evaluate_yang_trial, trial_beats
 from .schema import write_json
-from .prompts import read_text
+from .prompts import read_text, relative_artifact_path, run_librarian_prompt
 
 
 DEFAULT_AGENT_TOOLS = [
@@ -25,6 +24,9 @@ DEFAULT_AGENT_TOOLS = [
     "Task",
 ]
 
+RUN_LIBRARIAN_AGENT_NAME = "run_librarian"
+RUN_LIBRARIAN_AGENT_TOOLS = ["Read", "Glob", "Grep"]
+
 
 # ---------------------------------------------------------------------------
 # State
@@ -36,6 +38,9 @@ class DualLoopState:
     yang_session_id: str | None = None
     last_phase: str | None = None
     last_passed: bool | None = None
+    yang_kept_passed: bool | None = None
+    yang_kept_score: dict[str, Any] | None = None
+    yang_kept_source_hash: str | None = None
 
 
 @dataclass
@@ -44,8 +49,11 @@ class YangCycleState:
     max_calls: int
     law: Any
     artifact_dir: Path | None = None
+    baseline_record: dict[str, Any] | None = None
     calls: int = 0
     last_record: dict[str, Any] | None = None
+    best_record: dict[str, Any] | None = None
+    best_yang_text: str | None = None
 
     async def run(self, note: str) -> dict[str, Any]:
         if self.calls >= self.max_calls:
@@ -53,22 +61,25 @@ class YangCycleState:
                 "content": [{"type": "text", "text": "run_cycle call limit reached for this turn. Summarize and stop."}]
             }
         self.calls += 1
-        results = run_yang(self.paths)
-        passed = evaluate_snapshot(self.paths, self.law, results)
-        record = append_history(
+        record = evaluate_yang_trial(
             self.paths,
+            self.law,
+            persist_results=True,
+            persist_history=True,
             phase="trial",
-            world=self.law.world,
-            results=results,
-            passed=passed,
-            metadata={"source_hash": self.law.source_hash},
         )
         self.last_record = record
+        current_yang = read_text(self.paths.yang_path)
+        current_best = self.baseline_record if self.best_record is None else self.best_record
+        if trial_beats(record, current_best):
+            self.best_record = record
+            self.best_yang_text = current_yang
         payload = {
             "note": note,
-            "passed": passed,
+            "passed": record["passed"],
             "world": self.law.world,
-            "results": results,
+            "results": record["results"],
+            "score": record["score"],
             "source_hash": self.law.source_hash,
         }
         if self.artifact_dir is not None:
@@ -78,6 +89,30 @@ class YangCycleState:
                 "call": self.calls, "note": note, "record": record, "payload": payload,
             })
         return {"content": [{"type": "text", "text": json.dumps(payload, indent=2, sort_keys=False)}]}
+
+
+def run_librarian_config(paths: Any, root: Path) -> dict[str, Any]:
+    run_root = relative_artifact_path(paths.run_root, root)
+    return {
+        "name": RUN_LIBRARIAN_AGENT_NAME,
+        "description": (
+            f"Read-only librarian for artifacts under {run_root}. "
+            "Use it for targeted retrieval about prior attempts, diffs, metrics, scratchpads, ideas, or frontier files."
+        ),
+        "prompt": run_librarian_prompt(paths, root),
+        "tools": list(RUN_LIBRARIAN_AGENT_TOOLS),
+        "model": "inherit",
+    }
+
+
+def make_run_librarian_definition(sdk: Any, paths: Any, root: Path) -> Any:
+    config = run_librarian_config(paths, root)
+    return sdk.AgentDefinition(
+        description=config["description"],
+        prompt=config["prompt"],
+        tools=config["tools"],
+        model=config["model"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +262,7 @@ async def run_agent_turn(
     mcp_servers: dict[str, Any] | None = None,
     tools: list[str] | None = None,
     allowed_tools: list[str] | None = None,
+    agents: dict[str, Any] | None = None,
 ) -> tuple[str | None, str]:
     claude_home.mkdir(parents=True, exist_ok=True)
     editable_set = {p.resolve() for p in editable_paths}
@@ -246,6 +282,7 @@ async def run_agent_turn(
         resume=resume_session_id,
         continue_conversation=resume_session_id is not None,
         mcp_servers=mcp_servers,
+        agents=agents,
         env={
             "HOME": str(claude_home),
             "XDG_CONFIG_HOME": str(claude_home / "config"),
