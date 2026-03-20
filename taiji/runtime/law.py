@@ -280,11 +280,23 @@ def validate_live_yin(paths: Any, probe_results: JSONObject | None = None) -> Yi
     probe = {} if probe_results is None else dict(probe_results)
     primary = build_law_snapshot(paths, paths.yin_path, label="live-yin-primary")
     probe_passed = evaluate_snapshot(paths, primary, probe)
-    probe_score = score_snapshot(paths, primary, probe)
+    try:
+        probe_score = score_snapshot(paths, primary, probe)
+    except Exception as exc:
+        raise RuntimeError(
+            "yin.score(results) must stay finite on validation probes, including empty, partial, or failed results: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
     secondary = build_law_snapshot(paths, paths.yin_path, label="live-yin-secondary")
     secondary_passed = evaluate_snapshot(paths, secondary, probe)
-    secondary_score = score_snapshot(paths, secondary, probe)
+    try:
+        secondary_score = score_snapshot(paths, secondary, probe)
+    except Exception as exc:
+        raise RuntimeError(
+            "yin.score(results) must stay finite on validation probes, including empty, partial, or failed results: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
     if primary.world != secondary.world:
         raise RuntimeError(

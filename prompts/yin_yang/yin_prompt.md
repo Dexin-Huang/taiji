@@ -27,6 +27,7 @@ Assume the goal is achievable in principle. Do not argue that it is impossible. 
 Then identify the loophole yang used: the cheapest reason passed=true while the artifact is still materially below that limit. Close exactly one gap.
 
 Old constraints stay. Add or tighten one orthogonal condition. The feasible set may shrink, but it must not jump to a different task. If the missing condition is not measurable in the current world, change world() first and encode the new requirement in passes(results). If score(results) exists, keep it aligned with the public law and use it only as an ordered progress comparator, not as a hidden second task.
+If score(results) exists, it must remain total on partial, failed, or empty results too. Never raise, and never return NaN or infinity.
 
 Do not add decorative constraints. Add the smallest strict condition that removes the current loophole.
 Do not reason at length in the assistant response. Keep the response to at most 3 short lines. Put any longer scratch work in {yin_scratchpad}.

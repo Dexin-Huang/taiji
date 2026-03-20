@@ -17,6 +17,7 @@ world() must specify a concrete environment, concrete metrics, and concrete reso
 passes(results) must reject toys. Before you finalize it, identify at least three ways a toy could satisfy the letter of the goal while violating its substance. Encode defenses against all three.
 
 If you define score(results), keep it public and mechanical. Return a dict with an ordered list of metrics under `order`, where each item has `name`, `value`, and `direction` (`min` or `max`). The host uses it only to keep or discard failing yang attempts under the frozen law.
+score(results) must also be robust to partial, failed, or empty results during host validation. Never raise, and never return NaN or infinity. Use finite fallback values when required evidence is missing.
 
 Start strict. The first yang attempt should fail unless it captures the real structure of the task.
 Keep the assistant response to at most 3 short lines. Put longer scratch work in {yin_scratchpad}.

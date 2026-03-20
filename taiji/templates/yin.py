@@ -37,6 +37,9 @@ def score(results: dict) -> dict:
 
     The host compares `order` lexicographically under the frozen law snapshot.
     Keep it aligned with passes(results). Use it only to say which failure is closer.
+    Make it robust to partial, failed, or empty results too. Never raise, and
+    never return NaN or infinity. Use finite fallback values when evidence is
+    missing.
     """
     return {
         "order": [],

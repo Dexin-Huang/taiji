@@ -99,6 +99,20 @@ def restore_results_file(paths: Any, previous_text: str | None) -> None:
     paths.results_path.write_text(previous_text, encoding="utf-8")
 
 
+def seed_retry_prompt(base_prompt: str, *, attempt: int, error: Exception | None) -> str:
+    if error is None:
+        return base_prompt
+    error_text = f"{type(error).__name__}: {error}"
+    return (
+        f"{base_prompt}\n\n"
+        f"Previous seed validation attempt {attempt - 1} failed and was reverted.\n"
+        f"Validation error:\n{error_text}\n\n"
+        "Fix yin.py so it validates mechanically.\n"
+        "If score(results) is defined, it must accept empty, partial, or failed results "
+        "and always return finite numeric values."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -137,50 +151,96 @@ async def run_loop(args: argparse.Namespace) -> None:
         print("Seeding yin first.")
         ensure_text_file(paths.yin_scratchpad_path, "# Yin Scratchpad\n\n")
         seed_dir = artifact_dir(queue_root, "seed")
-        seed_yin_dir = agent_artifact_dir(seed_dir, "yin")
-        yin_snapshot = paths.yin_path.read_text(encoding="utf-8")
-        ctx = prompt_context(paths, ROOT)
-        seed_prompt = yin_seed_prompt(paths, ROOT)
-        seed_sys = render_system_prompt(
-            paths.yin_system_prompt_path,
-            "You are yin. Own {yin_file} and nothing else.",
-            ctx,
-        )
-        begin_agent_turn_logging(
-            agent_dir=seed_yin_dir, file_label="yin",
-            prompt=seed_prompt, system_prompt=seed_sys,
-            before_text=yin_snapshot, resumed_session_id=None,
-        )
-        _, yin_text = await run_agent_turn(
-            sdk=sdk, cwd=ROOT, repo_root=ROOT,
-            editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve()],
-            prompt=seed_prompt, system_prompt=seed_sys,
-            max_turns=args.yin_max_turns, cli_path=args.cli_path,
-            claude_model=args.claude_model, claude_home=yin_home,
-            session_id=yin_session_name,
-        )
-        if yin_text:
-            print(yin_text)
-        yin_after = read_text(paths.yin_path)
-        finish_agent_turn_logging(
-            agent_dir=seed_yin_dir, file_label="yin",
-            response=yin_text, before_text=yin_snapshot, after_text=yin_after,
-            session_id=yin_session_name, resumed_session_id=None,
-        )
-        try:
-            seed_record = seed(paths)
-        except Exception as exc:
-            paths.yin_path.write_text(yin_snapshot, encoding="utf-8")
-            raise RuntimeError(f"yin seed failed and was reverted: {type(exc).__name__}: {exc}") from exc
-        world = seed_record["world"]
-        write_json(seed_dir / "world_after.json", world)
-        record_seed_idea(paths, ROOT, artifact_dir=seed_dir, response=yin_text, changed=yin_snapshot != yin_after, world=world)
-        write_iteration_summary(seed_dir, {
-            "phase": "seed",
-            "mode": args.mode,
-            "record": seed_record,
-            "yin_changed": yin_snapshot != yin_after,
-        })
+        seed_attempt = 0
+        seed_resume_session_id: str | None = None
+        seed_validation_error: Exception | None = None
+        while not has_materialized_law(paths):
+            seed_attempt += 1
+            attempt_dir = agent_artifact_dir(
+                artifact_dir(queue_root, f"seed-attempt-{seed_attempt:04d}"),
+                "yin",
+            )
+            yin_snapshot = paths.yin_path.read_text(encoding="utf-8")
+            ctx = prompt_context(paths, ROOT)
+            seed_prompt = seed_retry_prompt(
+                yin_seed_prompt(paths, ROOT),
+                attempt=seed_attempt,
+                error=seed_validation_error,
+            )
+            seed_sys = render_system_prompt(
+                paths.yin_system_prompt_path,
+                "You are yin. Own {yin_file} and nothing else.",
+                ctx,
+            )
+            resumed_seed_session_id = seed_resume_session_id
+            begin_agent_turn_logging(
+                agent_dir=attempt_dir,
+                file_label="yin",
+                prompt=seed_prompt,
+                system_prompt=seed_sys,
+                before_text=yin_snapshot,
+                resumed_session_id=resumed_seed_session_id,
+            )
+            seed_resume_session_id, yin_text = await run_agent_turn(
+                sdk=sdk, cwd=ROOT, repo_root=ROOT,
+                editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve()],
+                prompt=seed_prompt, system_prompt=seed_sys,
+                max_turns=args.yin_max_turns, cli_path=args.cli_path,
+                claude_model=args.claude_model, claude_home=yin_home,
+                resume_session_id=resumed_seed_session_id,
+                session_id=yin_session_name,
+            )
+            if yin_text:
+                print(yin_text)
+            yin_after = read_text(paths.yin_path)
+            finish_agent_turn_logging(
+                agent_dir=attempt_dir,
+                file_label="yin",
+                response=yin_text,
+                before_text=yin_snapshot,
+                after_text=yin_after,
+                session_id=seed_resume_session_id or yin_session_name,
+                resumed_session_id=resumed_seed_session_id,
+            )
+            try:
+                seed_record = seed(paths)
+            except Exception as exc:
+                seed_validation_error = exc
+                paths.yin_path.write_text(yin_snapshot, encoding="utf-8")
+                (attempt_dir / "validation_error.txt").write_text(
+                    f"{type(exc).__name__}: {exc}\n",
+                    encoding="utf-8",
+                )
+                write_iteration_summary(attempt_dir.parent, {
+                    "phase": "seed-attempt",
+                    "attempt": seed_attempt,
+                    "status": "validation_failed",
+                    "mode": args.mode,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "yin_changed": yin_snapshot != yin_after,
+                })
+                print(f"Seed validation failed on attempt {seed_attempt}: {type(exc).__name__}: {exc}")
+                print("Reverted yin.py and retrying seed.")
+                continue
+
+            world = seed_record["world"]
+            write_json(seed_dir / "world_after.json", world)
+            record_seed_idea(
+                paths,
+                ROOT,
+                artifact_dir=seed_dir,
+                response=yin_text,
+                changed=yin_snapshot != yin_after,
+                world=world,
+            )
+            write_iteration_summary(seed_dir, {
+                "phase": "seed",
+                "mode": args.mode,
+                "record": seed_record,
+                "yin_changed": yin_snapshot != yin_after,
+                "attempts": seed_attempt,
+            })
+            break
 
     # -- Main loop ------------------------------------------------------------
     target_iteration = None if args.iterations < 0 else state.iteration + args.iterations

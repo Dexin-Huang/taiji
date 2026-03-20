@@ -140,6 +140,27 @@ def score(results: dict) -> dict:
     }
 """
 
+YIN_BAD_SCORE_PROBE = """def world() -> dict:
+    return {
+        "target": 2,
+    }
+
+
+def passes(results: dict) -> bool:
+    return False
+
+
+def score(results: dict) -> dict:
+    values = results.get("summary", {}).get("values", [])
+    mean_value = sum(values) / len(values)
+    return {
+        "order": [
+            {"name": "mean_value", "value": mean_value, "direction": "min"},
+        ],
+        "summary": {},
+    }
+"""
+
 YANG_SCORE_BASELINE = """def run() -> dict:
     return {
         "summary": {
@@ -430,6 +451,25 @@ def run_score_comparator_check() -> dict[str, Any]:
         }
 
 
+def run_score_probe_failure_check() -> dict[str, Any]:
+    with temporary_unit() as (_, paths):
+        _write_unit(paths, yin_text=YIN_BAD_SCORE_PROBE, yang_text=YANG_PASSING)
+        try:
+            validate_yin(paths)
+        except RuntimeError as exc:
+            message = str(exc)
+            _require(
+                "empty, partial, or failed results" in message,
+                "score probe failure did not surface the new guidance",
+            )
+            return {
+                "name": "score_probe_failure",
+                "ok": True,
+                "error": message,
+            }
+        raise SmokeFailure("unsafe yin.score unexpectedly validated")
+
+
 def run_unit_config_check() -> dict[str, Any]:
     with temporary_unit() as (unit_root, _):
         (unit_root / "spec.md").write_text(PROMPT_TEXT, encoding="utf-8")
@@ -521,6 +561,8 @@ def run_selected_checks(selection: str) -> list[dict[str, Any]]:
         checks.append(run_librarian_config_check())
     if selection in {"all", "score_comparator"}:
         checks.append(run_score_comparator_check())
+    if selection in {"all", "score_probe_failure"}:
+        checks.append(run_score_probe_failure_check())
     if selection in {"all", "unit_config"}:
         checks.append(run_unit_config_check())
     if selection in {"all", "ownership"}:
@@ -532,7 +574,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run lightweight taiji smoke checks")
     parser.add_argument(
         "--check",
-        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "seed_workspace", "run_id_selection", "librarian_config", "score_comparator", "unit_config", "ownership"),
+        choices=("all", "kernel", "contract_failure", "nested_submission", "import_stability", "fixed_snapshot", "adaptive_probe", "seed_workspace", "run_id_selection", "librarian_config", "score_comparator", "score_probe_failure", "unit_config", "ownership"),
         default="all",
         help="Select which lightweight check to run",
     )
