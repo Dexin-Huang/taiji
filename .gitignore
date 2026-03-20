@@ -5,7 +5,8 @@ dist/
 wheels/
 *.egg-info
 .venv/
-runs/
+runs/**
+!runs/README.md
 references/
 tmp_taiji/
 .claude/
