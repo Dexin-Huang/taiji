@@ -22,13 +22,7 @@
 
 Two agents take turns. **Yin** defines a world and writes acceptance criteria. **Yang** searches for a solution that passes. When yang succeeds, yin inspects *how* -- finds the loophole, tightens exactly one constraint, and the cycle restarts. The problem gets harder every round. Shortcuts get caught.
 
-> *易有太极，是生两仪，两仪生四象，四象生八卦*
->
-> The Yi has the Great Ultimate, which gives birth to Two Principles,
-> the Two Principles give birth to Four Images,
-> the Four Images give birth to Eight Trigrams.
->
-> — Xi Ci, I Ching
+> *易有太极，是生两仪，两仪生四象，四象生八卦* — 系辞
 
 The runtime has no opinions. It runs the cycle, records what happened, and stays out of the way.
 
