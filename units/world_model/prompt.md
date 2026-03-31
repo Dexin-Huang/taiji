@@ -1,15 +1,12 @@
 # Goal
 
-Find the mathematical operator for the model of the future.
+Derive the equation for a neural network layer that does all four:
 
-The operator should process a stream in constant time and memory per step.
-It should maintain a fixed-size state that compresses everything it has seen.
-It should adapt its own computation from that state — not frozen after training.
-It should predict what comes next by modeling the process that generates the stream, not by memorizing patterns.
+1. O(1) time and memory per step (no growing cache, no attention over history)
+2. Maintains a fixed-size hidden state that compresses the stream
+3. Updates its own parameters from the stream at inference time (not frozen after training)
+4. Predicts the next token
 
-Attention is O(n) per step and stores a growing KV cache. It fails.
-SSMs are O(1) and stateful but frozen after training. They fail.
-TTT adapts online but backpropagates through history. It's expensive.
+No existing architecture does all four. Transformers fail 1-2. SSMs/Mamba/RWKV/xLSTM fail 3. TTT fails 1.
 
-The gap is the operator that is O(1), stateful, adaptive, and predictive.
-Derive it. Prove its properties. Implement it. Test it.
+The deliverable is a PyTorch `nn.Module` with a `forward(x_t, state) -> (logits, new_state)` signature. Train it on a real task. Show it works. Show property 3 is real — that the layer's predictions improve on a distribution shift without any gradient from the training loss.
