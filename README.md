@@ -20,9 +20,11 @@
 
 ---
 
-Taiji is an adversarial co-evolution runtime for autonomous research. Two AI agents -- **yin** and **yang** -- alternate in a loop: yin defines the problem, yang searches for a solution, and when yang succeeds, yin tightens the constraints. The problem and the solution evolve together until convergence.
+Most AI research loops look the same: run the model, check the metric, tweak, repeat. The goal never changes. The evaluation never gets harder. If the model finds a shortcut, nobody notices.
 
-> *Yin writes the law. Yang finds a way. When yang passes, yin raises the bar.*
+Taiji works differently. Two agents take turns. **Yin** defines a world and writes acceptance criteria. **Yang** searches for a solution that passes. When yang succeeds, yin inspects *how* -- finds the loophole, tightens exactly one constraint, and the cycle restarts. The problem gets harder every round. Shortcuts get caught.
+
+The runtime itself has no opinions. It runs the cycle, records what happened, and stays out of the way.
 
 ## How It Works
 
@@ -58,27 +60,29 @@ Taiji is an adversarial co-evolution runtime for autonomous research. Two AI age
               └────────────────┘           converged ■
 ```
 
-**Yin** owns the world and the law: `world() -> dict`, `passes(results) -> bool`, and optional `score(results) -> dict`.
+**Yin** owns the world and the law: `world() -> dict`, `passes(results) -> bool`, optional `score(results) -> dict`.
 
-**Yang** owns the search: `run() -> dict` -- a JSON submission tested against the frozen law.
+**Yang** owns the search: `run() -> dict`. A JSON object tested against the frozen law.
 
-**The host** is purely mechanical. It executes the cycle, records artifacts, and never invents criteria of its own.
+**The host** just runs the cycle. No intelligence. No criteria. If it had opinions, the whole thing breaks.
 
 ## Quick Start
 
 ```bash
 pip install -e .
 
-# Create a new research unit
+# Create a unit -- this is your research problem
 python -m taiji.cycle new my_unit --goal "Build a self-improving model."
 
-# Seed the initial law
+# Seed the law (yin writes world() and passes())
 python -m taiji.cycle seed --unit-root units/my_unit --new
 
-# Run the full yin/yang loop (requires Claude Agent SDK)
+# Run the loop (needs Claude Agent SDK)
 pip install -e ".[agent]"
 python -m taiji.loop --unit-root units/my_unit --new --iterations -1
 ```
+
+The loop runs until yang passes and yin has nothing left to tighten. Or until you stop it.
 
 ## Architecture
 
@@ -120,13 +124,13 @@ Each run materializes under `runs/<unit>/<run_id>/`:
 <summary><strong>Loop modes and run selection</strong></summary>
 
 **Run selection:**
-- `--new` &mdash; fresh run from unit seeds
-- `--run-id <id>` &mdash; resume a specific run
-- Default &mdash; resume current run, or create new
+- `--new` -- fresh run from unit seeds
+- `--run-id <id>` -- resume a specific run
+- Default -- resume current run, or create new
 
 **Modes:**
-- `--mode adaptive` (default) &mdash; yin refines constraints after yang passes
-- `--mode fixed` &mdash; yin seeds once, yang works against a frozen law
+- `--mode adaptive` (default) -- yin refines constraints after yang passes
+- `--mode fixed` -- yin seeds once, yang works against a frozen law
 
 **Watchdog:**
 ```bash
@@ -148,17 +152,19 @@ Units use the shared prompt set in `prompts/yin_yang/` by default. Override any 
 
 </details>
 
-## Design Principles
+## What the runtime enforces
 
-- **The host is mechanical.** No intelligence in the runtime. All intelligence emerges from the agents.
-- **File ownership is enforced.** Yang can only edit `yang.py`. Yin can only edit `yin.py`. Edit hooks prevent boundary crossing.
-- **Yang is selected harshly.** A new `yang.py` is kept only when it beats the current candidate under the frozen law. Otherwise the turn is discarded.
-- **Loopholes get caught.** Yin identifies how yang exploited `passes()` and tightens exactly one orthogonal constraint per round.
-- **Everything is an artifact.** State is reconstructed from `history.ndjson` and `ideas.ndjson`. Nothing is in-memory only.
+Yang can only edit `yang.py`. Yin can only edit `yin.py`. Edit hooks enforce this -- no exceptions. If yang writes a brilliant solution that also tweaks yin's acceptance criteria, the edit gets rejected.
+
+Yang is selected harshly. A new `yang.py` is kept only when it beats the current best under the frozen law. Otherwise the turn is thrown out and the previous working copy is restored. Most yang turns get discarded.
+
+Yin's changes are validated for determinism -- `world()` must return the same dict on two consecutive imports. If it doesn't, the change is reverted. No randomness in the law.
+
+Everything is recorded to `history.ndjson` and `ideas.ndjson`. No in-memory state. Kill the process, restart it, pick up where you left off.
 
 ## Versioning
 
-Taiji is pre-1.0. The API may change between minor versions. Stability of the core cycle mechanics (`world`, `passes`, `run`) is a priority.
+Pre-1.0. The core interfaces (`world`, `passes`, `run`) are stable. Everything else might change.
 
 ## License
 

@@ -1,28 +1,27 @@
-# Contributing to Taiji
+# Contributing
 
-Thank you for your interest in contributing.
+## Setup
 
-## Development Setup
+```bash
+git clone https://github.com/Dexin-Huang/taiji.git
+cd taiji
+pip install -e ".[agent]"
+python -m taiji.smoke   # should pass
+```
 
-1. Fork and clone the repo
-2. Install dependencies: `pip install -e ".[agent]"`
-3. Run smoke tests: `python -m taiji.smoke`
+## Making changes
 
-## Pull Request Process
+Branch off `main`. Run `python -m taiji.smoke` before opening a PR. Describe what changed and why in the PR body -- diffs alone aren't enough context.
 
-1. Create a feature branch from `main`
-2. Make your changes
-3. Run `python -m taiji.smoke` and ensure everything passes
-4. Submit a PR with a clear description of what changed and why
+## Naming conventions
 
-## Conventions
+These matter. Use them consistently:
 
-- `unit_root` not `env_root`
-- `law` not `rubric`
+- `unit_root`, not `env_root`
+- `law`, not `rubric`
 - `taiji` in all names, MCP servers, session slugs
-- Yin owns `world()` and `passes(results)`. Yang owns `run()`.
-- The host is mechanical. No intelligence in the runtime.
+- Yin owns `world()` and `passes()`. Yang owns `run()`. Don't blur the boundary.
 
-## Reporting Bugs
+## Bugs
 
-Use [GitHub Issues](https://github.com/Dexin-Huang/taiji/issues). Include: steps to reproduce, expected behavior, actual behavior, Python version.
+[Open an issue.](https://github.com/Dexin-Huang/taiji/issues) Include steps to reproduce, what you expected, what actually happened, and your Python version.
