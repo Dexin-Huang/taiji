@@ -9,7 +9,7 @@
 <h1 align="center">Taiji</h1>
 
 <p align="center">
-  <strong>Two agents. One evolving truth.</strong>
+  <strong>Adversarial co-evolution runtime for autonomous research</strong>
 </p>
 
 <p align="center">
@@ -64,7 +64,7 @@ The runtime has no opinions. It runs the cycle, records what happened, and stays
 
 **Yang** owns the search: `run() -> dict`. A JSON object tested against the frozen law.
 
-**The host** just runs the cycle. No intelligence. No criteria. If it had opinions, the whole thing breaks.
+**The host** runs the cycle and records artifacts. It never invents criteria.
 
 ## Quick Start
 
