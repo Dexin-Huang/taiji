@@ -5,8 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "taiji"
 version = "0.1.0"
-description = "Yin/yang architecture search runtime for self-contained research units"
+description = "Adversarial co-evolution runtime for autonomous research"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "anyio>=4",
