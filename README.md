@@ -20,11 +20,11 @@
 
 ---
 
-Most AI research loops look the same: run the model, check the metric, tweak, repeat. The goal never changes. The evaluation never gets harder. If the model finds a shortcut, nobody notices.
+Two agents take turns. **Yin** defines a world and writes acceptance criteria. **Yang** searches for a solution that passes. When yang succeeds, yin inspects *how* -- finds the loophole, tightens exactly one constraint, and the cycle restarts. The problem gets harder every round. Shortcuts get caught.
 
-Taiji works differently. Two agents take turns. **Yin** defines a world and writes acceptance criteria. **Yang** searches for a solution that passes. When yang succeeds, yin inspects *how* -- finds the loophole, tightens exactly one constraint, and the cycle restarts. The problem gets harder every round. Shortcuts get caught.
+> *Yin writes the law. Yang finds a way. When yang passes, yin raises the bar.*
 
-The runtime itself has no opinions. It runs the cycle, records what happened, and stays out of the way.
+The runtime has no opinions. It runs the cycle, records what happened, and stays out of the way.
 
 ## How It Works
 
