@@ -11,6 +11,7 @@ When the stream changes, the system notices and adapts. When something it
 modeled before reappears, it remembers. It never runs out of memory. It
 never slows down.
 
-The deliverable is a working implementation that demonstrates all of this
-on real data — not synthetic benchmarks. Train it. Run it. Show it learns
-continuously, models the world, and scales.
+The deliverable is a theoretically sound architecture with a working
+proof of concept. Derive the math. Prove the properties hold. Implement
+a small prototype that demonstrates the core mechanism. Scale is not
+the concern — correctness is.
