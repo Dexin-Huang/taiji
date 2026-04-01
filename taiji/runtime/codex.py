@@ -158,11 +158,12 @@ async def run_codex_turn(
         thread_id = thread_resp["thread"]["id"]
 
         # Build full prompt with system context + file ownership rules
-        owned_files = ", ".join(p.name for p in editable_paths)
+        file_paths = "\n".join(f"  - {p}" for p in editable_paths)
         full_prompt = (
             f"{system_prompt}\n\n"
-            f"You may only edit these files: {owned_files}\n"
-            f"Working directory: {cwd}\n\n"
+            f"IMPORTANT: You must write your changes directly to these files:\n"
+            f"{file_paths}\n\n"
+            f"Do not just describe what to write. Actually edit the files using your tools.\n\n"
             f"{prompt}"
         )
 
@@ -178,50 +179,45 @@ async def run_codex_turn(
         )
 
         # Poll notifications until turn/completed
-        response_text = ""
-        while True:
+        response_parts = []
+        completed = False
+        while not completed:
             await asyncio.sleep(0.5)
             for notif in client.drain_notifications():
                 method = notif.get("method", "")
                 params = notif.get("params", {})
 
-                if method == "turn/completed":
-                    turn = params.get("turn", {})
-                    # Extract final message from turn output
-                    for item in turn.get("output", []):
-                        if item.get("type") == "message":
-                            for content in item.get("content", []):
-                                if content.get("type") == "output_text":
-                                    response_text += content.get("text", "")
-                    return thread_id, response_text.strip()
-
                 if method == "item/completed":
                     item = params.get("item", {})
-                    if item.get("type") == "message":
-                        for content in item.get("content", []):
-                            if content.get("type") == "output_text":
-                                response_text += content.get("text", "")
+                    # Agent text responses
+                    if item.get("type") == "agentMessage":
+                        text = item.get("text", "")
+                        if text:
+                            response_parts.append(text)
 
-            # Check if turn request itself completed (error case)
-            if turn_future.done():
+                if method == "turn/completed":
+                    completed = True
+                    break
+
+            # Check if turn request errored
+            if turn_future.done() and not completed:
                 exc = turn_future.exception()
                 if exc:
                     raise exc
-                # If turn/start returned but no turn/completed notification yet,
-                # keep polling briefly
-                await asyncio.sleep(1)
-                # Final drain
+                # Give a final drain chance
+                await asyncio.sleep(2)
                 for notif in client.drain_notifications():
+                    if notif.get("method") == "item/completed":
+                        item = notif.get("params", {}).get("item", {})
+                        if item.get("type") == "agentMessage":
+                            text = item.get("text", "")
+                            if text:
+                                response_parts.append(text)
                     if notif.get("method") == "turn/completed":
-                        params = notif.get("params", {})
-                        turn = params.get("turn", {})
-                        for item in turn.get("output", []):
-                            if item.get("type") == "message":
-                                for content in item.get("content", []):
-                                    if content.get("type") == "output_text":
-                                        response_text += content.get("text", "")
-                        return thread_id, response_text.strip()
-                return thread_id, response_text.strip()
+                        completed = True
+                break
+
+        return thread_id, "\n".join(response_parts).strip()
     finally:
         await client.close()
 
