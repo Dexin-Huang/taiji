@@ -158,7 +158,14 @@ async def run_codex_turn(
         thread_id = thread_resp["thread"]["id"]
 
         # System prompt + user prompt combined (codex has no separate system field)
-        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        # Codex edits files via shell commands, so we must tell it to write code
+        # to the actual files rather than just responding with text.
+        file_list = "\n".join(str(p) for p in editable_paths)
+        edit_instruction = (
+            f"You must edit the following files directly (use shell commands to write to them). "
+            f"Do not just describe what to write — actually write the code:\n{file_list}\n\n"
+        )
+        full_prompt = f"{system_prompt}\n\n{edit_instruction}{prompt}" if system_prompt else f"{edit_instruction}{prompt}"
 
         # Start turn and wait for completion
         turn_future = asyncio.ensure_future(
