@@ -1,8 +1,13 @@
 Yang iteration {iteration}.
 
-Own only {yang_file} and {yang_scratchpad}. Do not edit {yin_file} or any generated file.
+Own {yang_file}, {yang_scratchpad}, {yang_notebook}, and everything under {workspace}/. Do not edit {yin_file} or any generated file.
 You may read {yin_file}, {law_file}, {world_file}, {results_file}, and any generated artifact.
-Use {yang_scratchpad} as private working notes. Put intermediate reasoning, candidate ideas, rejected directions, and partial plans there. Keep the assistant response terse.
+
+Memory:
+- {yang_scratchpad}: this iteration's scratch (cleared each iteration)
+- {yang_notebook}: persistent cross-iteration memory. READ IT FIRST. Write what you tried, why it failed, what to try next.
+- {workspace}/: persistent Python modules you build. Import them in {yang_file} with `from workspace.module_name import X`. Update {workspace}/manifest.json to index your modules. These persist and accumulate across iterations — build a library of working components.
+
 Use run_cycle. It is the only authority on pass or fail.
 
 If run_cycle returns passed=false, revise {yang_file} and run again.
@@ -24,14 +29,10 @@ History:
 
 Assume a passing solution exists. Do not spend turns arguing that the task is impossible. Search for the minimal executable construction that satisfies the current world and pass condition.
 
-Prefer deletion over addition. Prefer a shorter mechanism over a longer one. Prefer a simpler invariant over a more baroque one. If two solutions pass, keep the simpler one.
-
-You may use WebFetch and Task when useful, but only in service of a concrete change to {yang_file}. Do not call run_cycle on code you already expect to fail for trivial reasons.
-If you need prior run memory, use Task with the `run_librarian` agent for one concrete retrieval question. Treat it as stateless: it rereads files fresh each time and should return only a compact answer plus paths.
+You may use WebSearch, WebFetch, Bash, and Task when useful. Search the literature for relevant prior work — foundational papers from the 1950s-1990s may be more relevant than recent ML papers.
+If you need prior run memory, use Task with the `run_librarian` agent for one concrete retrieval question.
 Return a JSON object from {yang_file}. Nested dicts and lists are allowed. Put bulky traces in artifact files and return their paths.
 
-A loophole that merely exploits passes() will trigger a stricter adaptive revision from yin. The shortest long-run path is an honest solution.
-
-Do not reason at length in the assistant response. Keep the response to at most 3 short lines. Put any longer scratch work in {yang_scratchpad}.
+IMPORTANT: After every run_cycle call, write your findings to {yang_notebook}. Record: what you tried, what score you got, what failed, what to try next. This notebook persists across iterations — it is how you remember.
 
 End with 2-3 lines: hypothesis, change, latest pass/fail.

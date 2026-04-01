@@ -64,10 +64,11 @@ async def run_yin_turn(args, **kwargs):
             system_prompt=kwargs["system_prompt"],
             model=getattr(args, "codex_model", None),
         )
-        return thread_id, text
+        return thread_id, text, []
     else:
         sdk = kwargs.pop("sdk")
-        return await run_agent_turn(sdk=sdk, **kwargs)
+        sid, text, log = await run_agent_turn(sdk=sdk, **kwargs)
+        return sid, text, log
 
 
 def _snapshot_workspace(workspace_path: Path) -> dict[str, bytes]:
@@ -228,7 +229,7 @@ async def run_loop(args: argparse.Namespace) -> None:
                 before_text=yin_snapshot,
                 resumed_session_id=resumed_seed_session_id,
             )
-            seed_resume_session_id, yin_text = await run_yin_turn(
+            seed_resume_session_id, yin_text, yin_log = await run_yin_turn(
                 args,
                 sdk=sdk, cwd=ROOT, repo_root=ROOT,
                 editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve(), paths.yin_notebook_path.resolve()],
@@ -249,6 +250,7 @@ async def run_loop(args: argparse.Namespace) -> None:
                 after_text=yin_after,
                 session_id=seed_resume_session_id or yin_session_name,
                 resumed_session_id=resumed_seed_session_id,
+                conversation_log=yin_log,
             )
             try:
                 seed_record = seed(paths)
@@ -340,7 +342,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             before_text=yang_before,
             resumed_session_id=resumed_yang_session_id,
         )
-        yang_session_id, yang_text = await run_agent_turn(
+        yang_session_id, yang_text, yang_log = await run_agent_turn(
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
             editable_paths=[paths.yang_path.resolve(), paths.yang_scratchpad_path.resolve(), paths.yang_notebook_path.resolve()],
             editable_dirs=[paths.workspace_path.resolve()],
@@ -395,6 +397,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             response=yang_text, before_text=yang_before, after_text=yang_after,
             session_id=yang_session_id or yang_session_name,
             resumed_session_id=resumed_yang_session_id,
+            conversation_log=yang_log,
         )
 
         if attempt_record is not None:
@@ -497,7 +500,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             prompt=yin_prompt, system_prompt=yin_sys,
             before_text=yin_snapshot, resumed_session_id=None,
         )
-        _, yin_text = await run_yin_turn(
+        _, yin_text, yin_log = await run_yin_turn(
             args,
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
             editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve(), paths.yin_notebook_path.resolve()],
@@ -530,6 +533,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             agent_dir=yin_dir, file_label="yin",
             response=yin_text, before_text=yin_snapshot, after_text=yin_after,
             session_id=yin_session_name, resumed_session_id=None,
+            conversation_log=yin_log,
         )
         yin_changed = yin_after != yin_snapshot
         world_changed = world != previous_world

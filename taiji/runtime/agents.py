@@ -184,6 +184,7 @@ def begin_agent_turn_logging(
 def finish_agent_turn_logging(
     *, agent_dir: Path, file_label: str, response: str, before_text: str,
     after_text: str, session_id: str | None, resumed_session_id: str | None,
+    conversation_log: list[dict[str, Any]] | None = None,
 ) -> None:
     write_text(agent_dir / "response.md", response or "")
     write_text(agent_dir / f"{file_label}.after.py", after_text)
@@ -195,6 +196,8 @@ def finish_agent_turn_logging(
         "session_id": session_id, "resumed_session_id": resumed_session_id,
         "changed": before_text != after_text, "status": "completed",
     })
+    if conversation_log:
+        write_json(agent_dir / "conversation.json", conversation_log)
 
 
 def write_iteration_summary(iter_dir: Path, payload: dict[str, Any]) -> None:
@@ -306,6 +309,7 @@ async def run_agent_turn(
     )
 
     assistant_lines: list[str] = []
+    conversation_log: list[dict[str, Any]] = []
     final_session_id: str | None = None
     async with sdk.ClaudeSDKClient(options=options) as client:
         await client.query(prompt, session_id=session_id)
@@ -316,6 +320,19 @@ async def run_agent_turn(
                         text = block.text.strip()
                         if text:
                             assistant_lines.append(text)
+                            conversation_log.append({"role": "assistant", "text": text})
+                    elif hasattr(block, "name"):
+                        # Tool use block
+                        conversation_log.append({
+                            "role": "tool_call",
+                            "tool": getattr(block, "name", "?"),
+                            "input": str(getattr(block, "input", ""))[:500],
+                        })
             elif isinstance(message, sdk.ResultMessage):
                 final_session_id = message.session_id
-    return final_session_id, "\n".join(assistant_lines).strip()
+            else:
+                # Capture tool results and other message types
+                msg_type = type(message).__name__
+                msg_str = str(message)[:500] if len(str(message)) < 1000 else str(message)[:500] + "..."
+                conversation_log.append({"role": msg_type, "content": msg_str})
+    return final_session_id, "\n".join(assistant_lines).strip(), conversation_log

@@ -1,9 +1,11 @@
 Yin seed.
 
-Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+Own {yin_file}, {yin_scratchpad}, and {yin_notebook}. Do not edit {yang_file} or any generated file.
 You may read {yang_file}, prompt.md, and any generated artifact.
 Preserve world(), passes(results), and optional score(results).
-Use {yin_scratchpad} as private working notes. Keep the assistant response terse.
+Use {yin_scratchpad} for this iteration's working notes.
+Use {yin_notebook} for persistent cross-iteration memory. Write your analysis and tightening strategy there.
+You may use WebSearch and WebFetch to research the problem domain.
 
 Goal:
 {goal}

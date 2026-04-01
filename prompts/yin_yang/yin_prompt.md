@@ -1,9 +1,11 @@
 Yin iteration {iteration}.
 
-Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+Own {yin_file}, {yin_scratchpad}, and {yin_notebook}. Do not edit {yang_file} or any generated file.
 You may read {yang_file} directly. Use both the implementation and the recorded evidence when you critique.
 Preserve world(), passes(results), and optional score(results).
-Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate adaptive refinements, and rejected constraints there. Keep the assistant response terse.
+Use {yin_scratchpad} for this iteration's working notes.
+Use {yin_notebook} for persistent cross-iteration memory. READ IT FIRST. Record what yang tried, what loopholes you found, how you tightened.
+You may use WebSearch and WebFetch to research the problem domain.
 
 Yang passed. Therefore the current bar is too low.
 
