@@ -58,6 +58,8 @@ class DualLoopPaths:
     yin_path: Path
     yang_scratchpad_path: Path
     yin_scratchpad_path: Path
+    yang_notebook_path: Path
+    yin_notebook_path: Path
     yang_prompt_path: Path
     yin_prompt_path: Path
     yin_seed_prompt_path: Path
@@ -194,6 +196,8 @@ def dual_loop_paths(
         yin_path=run_root / config.yin_entry,
         yang_scratchpad_path=run_root / "yang_scratchpad.md",
         yin_scratchpad_path=run_root / "yin_scratchpad.md",
+        yang_notebook_path=run_root / "yang_notebook.md",
+        yin_notebook_path=run_root / "yin_notebook.md",
         yang_prompt_path=resolve_prompt_path(root, "yang_prompt.override.md", "yang_prompt.md", prompt_set),
         yin_prompt_path=resolve_prompt_path(root, "yin_prompt.override.md", "yin_prompt.md", prompt_set),
         yin_seed_prompt_path=resolve_prompt_path(root, "yin_seed_prompt.override.md", "yin_seed_prompt.md", prompt_set),

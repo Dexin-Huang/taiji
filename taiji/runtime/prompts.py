@@ -26,18 +26,23 @@ def relative_artifact_path(path: Path, root: Path) -> str:
         return str(path)
 
 
-def history_summary(paths: Any, limit: int = 6) -> str:
+def history_summary(paths: Any, limit: int = 20) -> str:
     if not paths.history_path.exists():
         return "No history yet."
     lines = [line.strip() for line in read_text(paths.history_path).splitlines() if line.strip()]
     if not lines:
         return "No history yet."
     payloads = [json.loads(line) for line in lines[-limit:]]
-    return "\n".join(
-        f"- phase={item.get('phase')} passed={item.get('passed')} "
-        f"world_keys={len(item.get('world', {}))} result_keys={len(item.get('results', {}))}"
-        for item in payloads
-    )
+    parts = []
+    for i, item in enumerate(payloads):
+        phase = item.get("phase", "?")
+        passed = item.get("passed")
+        score = item.get("score", {})
+        summary = score.get("summary", {}) if isinstance(score, dict) else {}
+        # Show score details so yang can see progression
+        score_str = ", ".join(f"{k}={v}" for k, v in summary.items()) if summary else "no score"
+        parts.append(f"- [{i+1}] {phase}: passed={passed} | {score_str}")
+    return "\n".join(parts)
 
 
 def law_text(paths: Any) -> str:
@@ -74,6 +79,8 @@ def prompt_context(paths: Any, root: Path, *, iteration: int | None = None) -> d
         "yin_file": relative_artifact_path(paths.yin_path, root),
         "yang_scratchpad": relative_artifact_path(paths.yang_scratchpad_path, root),
         "yin_scratchpad": relative_artifact_path(paths.yin_scratchpad_path, root),
+        "yang_notebook": relative_artifact_path(paths.yang_notebook_path, root),
+        "yin_notebook": relative_artifact_path(paths.yin_notebook_path, root),
         "world_file": relative_artifact_path(paths.world_path, root),
         "law_file": relative_artifact_path(paths.law_path, root),
         "results_file": relative_artifact_path(paths.results_path, root),
@@ -102,9 +109,10 @@ def render_system_prompt(path: Path, default_prompt: str, context: dict[str, str
 def default_yang_prompt_template() -> str:
     return """Yang iteration {iteration}.
 
-Own only {yang_file} and {yang_scratchpad}. Do not edit {yin_file} or any generated file.
+Own only {yang_file}, {yang_scratchpad}, and {yang_notebook}. Do not edit {yin_file} or any generated file.
 You may read {yin_file}, {law_file}, {world_file}, {results_file}, and any generated artifact.
-Use {yang_scratchpad} as private working notes. Put intermediate reasoning, candidate ideas, rejected directions, and partial plans there. Keep the assistant response terse.
+Use {yang_scratchpad} for this iteration's working notes (cleared each iteration).
+Use {yang_notebook} for persistent cross-iteration memory: what you tried, why it failed, what patterns you see, what to try next. READ IT FIRST every iteration. Write to it after every attempt. This is how you remember.
 Use run_cycle. It is the only authority on pass or fail.
 
 If run_cycle returns passed=false, revise {yang_file} and run again.
@@ -143,10 +151,11 @@ End with 2-3 lines: hypothesis, change, latest pass/fail.
 def default_yin_seed_prompt_template() -> str:
     return """Yin seed.
 
-Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+Own only {yin_file}, {yin_scratchpad}, and {yin_notebook}. Do not edit {yang_file} or any generated file.
 You may read {yang_file}, prompt.md, and any generated artifact.
 Preserve world(), passes(results), and optional score(results).
-Use {yin_scratchpad} as private working notes. Keep the assistant response terse.
+Use {yin_scratchpad} for this iteration's working notes (cleared each iteration).
+Use {yin_notebook} for persistent cross-iteration memory: what yang tried, what loopholes you found, how you tightened, what to watch for next. READ IT FIRST. Write to it after every turn.
 
 Goal:
 {goal}
@@ -170,10 +179,11 @@ Keep the assistant response to at most 3 short lines. Put longer scratch work in
 def default_yin_prompt_template() -> str:
     return """Yin iteration {iteration}.
 
-Own only {yin_file} and {yin_scratchpad}. Do not edit {yang_file} or any generated file.
+Own only {yin_file}, {yin_scratchpad}, and {yin_notebook}. Do not edit {yang_file} or any generated file.
 You may read {yang_file} directly. Use both the implementation and the recorded evidence when you critique.
 Preserve world(), passes(results), and optional score(results).
-Use {yin_scratchpad} as private working notes. Put loophole analysis, candidate adaptive refinements, and rejected constraints there. Keep the assistant response terse.
+Use {yin_scratchpad} for this iteration's working notes.
+Use {yin_notebook} for persistent cross-iteration memory. READ IT FIRST. Record what yang tried, what loopholes you found, and how you tightened.
 
 Yang passed. Therefore the current bar is too low.
 

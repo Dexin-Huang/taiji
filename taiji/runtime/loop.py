@@ -203,7 +203,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             seed_resume_session_id, yin_text = await run_yin_turn(
                 args,
                 sdk=sdk, cwd=ROOT, repo_root=ROOT,
-                editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve()],
+                editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve(), paths.yin_notebook_path.resolve()],
                 prompt=seed_prompt, system_prompt=seed_sys,
                 max_turns=args.yin_max_turns, cli_path=args.cli_path,
                 claude_model=args.claude_model, claude_home=yin_home,
@@ -312,7 +312,7 @@ async def run_loop(args: argparse.Namespace) -> None:
         )
         yang_session_id, yang_text = await run_agent_turn(
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
-            editable_paths=[paths.yang_path.resolve(), paths.yang_scratchpad_path.resolve()],
+            editable_paths=[paths.yang_path.resolve(), paths.yang_scratchpad_path.resolve(), paths.yang_notebook_path.resolve()],
             prompt=yang_prompt, system_prompt=yang_sys,
             max_turns=args.yang_max_turns, cli_path=args.cli_path,
             claude_model=args.claude_model, claude_home=yang_home,
@@ -468,7 +468,7 @@ async def run_loop(args: argparse.Namespace) -> None:
         _, yin_text = await run_yin_turn(
             args,
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
-            editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve()],
+            editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve(), paths.yin_notebook_path.resolve()],
             prompt=yin_prompt, system_prompt=yin_sys,
             max_turns=args.yin_max_turns, cli_path=args.cli_path,
             claude_model=args.claude_model, claude_home=yin_home,
