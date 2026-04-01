@@ -157,15 +157,8 @@ async def run_codex_turn(
         })
         thread_id = thread_resp["thread"]["id"]
 
-        # Build full prompt with system context + file ownership rules
-        file_paths = "\n".join(f"  - {p}" for p in editable_paths)
-        full_prompt = (
-            f"{system_prompt}\n\n"
-            f"IMPORTANT: You must write your changes directly to these files:\n"
-            f"{file_paths}\n\n"
-            f"Do not just describe what to write. Actually edit the files using your tools.\n\n"
-            f"{prompt}"
-        )
+        # System prompt + user prompt combined (codex has no separate system field)
+        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
 
         # Start turn and wait for completion
         turn_future = asyncio.ensure_future(
