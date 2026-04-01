@@ -7,7 +7,7 @@ name = "taiji"
 version = "0.1.0"
 description = "Adversarial co-evolution runtime for autonomous research"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "anyio>=4",
@@ -24,3 +24,6 @@ taiji-cycle = "taiji.cycle:main"
 taiji-loop = "taiji.loop:main"
 taiji-watch = "taiji.watch:main"
 taiji-smoke = "taiji.smoke:main"
+
+[tool.setuptools.packages.find]
+include = ["taiji*"]

@@ -1,0 +1,8 @@
+name = "world_model"
+kind = "yin_yang"
+prompt_set = "yin_yang"
+
+[entry]
+prompt = "prompt.md"
+yang = "yang.py"
+yin = "yin.py"
