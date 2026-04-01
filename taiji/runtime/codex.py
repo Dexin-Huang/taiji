@@ -128,6 +128,25 @@ class CodexAppServer:
         return out
 
 
+import re
+
+
+def _extract_code_block(text: str) -> str | None:
+    """Extract the first ```python ... ``` block from text."""
+    pattern = r"```python\s*\n(.*?)```"
+    match = re.search(pattern, text, re.DOTALL)
+    if match:
+        return match.group(1).strip() + "\n"
+    # Fallback: try any ``` block
+    pattern = r"```\s*\n(.*?)```"
+    match = re.search(pattern, text, re.DOTALL)
+    if match:
+        code = match.group(1).strip()
+        if "def " in code:
+            return code + "\n"
+    return None
+
+
 async def run_codex_turn(
     *,
     cwd: Path,
@@ -136,7 +155,7 @@ async def run_codex_turn(
     system_prompt: str,
     model: str | None = None,
     effort: str | None = "xhigh",
-    sandbox: str = "workspace-write",
+    sandbox: str = "read-only",
 ) -> tuple[str | None, str]:
     """Run a single Codex turn. Returns (thread_id, response_text).
 
@@ -158,14 +177,17 @@ async def run_codex_turn(
         thread_id = thread_resp["thread"]["id"]
 
         # System prompt + user prompt combined (codex has no separate system field)
-        # Codex edits files via shell commands, so we must tell it to write code
-        # to the actual files rather than just responding with text.
-        file_list = "\n".join(str(p) for p in editable_paths)
-        edit_instruction = (
-            f"You must edit the following files directly (use shell commands to write to them). "
-            f"Do not just describe what to write — actually write the code:\n{file_list}\n\n"
-        )
-        full_prompt = f"{system_prompt}\n\n{edit_instruction}{prompt}" if system_prompt else f"{edit_instruction}{prompt}"
+        # Codex sandbox file writes are unreliable, so we ask it to output the
+        # full file content in its response, then we write it ourselves.
+        primary_file = editable_paths[0] if editable_paths else None
+        write_instruction = ""
+        if primary_file:
+            write_instruction = (
+                f"\nIMPORTANT: Output the COMPLETE content of {primary_file.name} "
+                f"inside a fenced code block tagged ```python ... ```. "
+                f"The host will extract and write it. Do not use shell commands to edit files.\n\n"
+            )
+        full_prompt = f"{system_prompt}\n\n{write_instruction}{prompt}" if system_prompt else f"{write_instruction}{prompt}"
 
         # Start turn and wait for completion
         turn_future = asyncio.ensure_future(
@@ -181,6 +203,7 @@ async def run_codex_turn(
         # Poll notifications until turn/completed
         response_parts = []
         completed = False
+        print("[codex] Waiting for turn completion...")
         while not completed:
             await asyncio.sleep(0.5)
             for notif in client.drain_notifications():
@@ -189,13 +212,19 @@ async def run_codex_turn(
 
                 if method == "item/completed":
                     item = params.get("item", {})
-                    # Agent text responses
-                    if item.get("type") == "agentMessage":
+                    itype = item.get("type", "")
+                    print(f"[codex] item/completed: {itype}")
+                    if itype == "agentMessage":
                         text = item.get("text", "")
                         if text:
                             response_parts.append(text)
+                            print(f"[codex]   text: {text[:200]}")
+                    elif itype == "commandExecution":
+                        cmd = item.get("command", "")
+                        print(f"[codex]   cmd: {cmd[:200]}")
 
                 if method == "turn/completed":
+                    print(f"[codex] Turn completed. Response parts: {len(response_parts)}")
                     completed = True
                     break
 
@@ -217,7 +246,16 @@ async def run_codex_turn(
                         completed = True
                 break
 
-        return thread_id, "\n".join(response_parts).strip()
+        response_text = "\n".join(response_parts).strip()
+
+        # Extract python code block and write to primary editable file
+        if primary_file and response_text:
+            code = _extract_code_block(response_text)
+            if code:
+                primary_file.write_text(code, encoding="utf-8")
+                print(f"[codex] Wrote {len(code)} bytes to {primary_file.name}")
+
+        return thread_id, response_text
     finally:
         await client.close()
 
