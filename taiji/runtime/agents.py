@@ -21,7 +21,9 @@ DEFAULT_AGENT_TOOLS = [
     "Edit",
     "MultiEdit",
     "WebFetch",
+    "WebSearch",
     "Task",
+    "Bash",
 ]
 
 RUN_LIBRARIAN_AGENT_NAME = "run_librarian"
