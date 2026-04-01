@@ -216,8 +216,9 @@ def resolve_edit_path(raw_path: str, cwd: Path, repo_root: Path) -> Path:
     return candidate.resolve()
 
 
-def make_edit_hook(editable_set: set[Path], cwd: Path, repo_root: Path):
-    """Return an async hook that restricts Write/Edit to *editable_set*."""
+def make_edit_hook(editable_set: set[Path], cwd: Path, repo_root: Path, editable_dirs: set[Path] | None = None):
+    """Return an async hook that restricts Write/Edit to *editable_set* or under *editable_dirs*."""
+    _editable_dirs = editable_dirs or set()
 
     async def restrict_edits(input_data: dict[str, Any], tool_use_id: str | None, context: dict[str, Any]) -> dict[str, Any]:
         tool_name = input_data.get("tool_name")
@@ -227,10 +228,20 @@ def make_edit_hook(editable_set: set[Path], cwd: Path, repo_root: Path):
         if not raw_path:
             return _deny("Missing file_path on edit request.")
         target = resolve_edit_path(str(raw_path), cwd, repo_root)
-        if target not in editable_set:
-            owned = ", ".join(sorted(p.name for p in editable_set))
-            return _deny(f"Only {owned} may be edited in this turn.")
-        return _allow("Edit stays inside the owned file.")
+        # Check exact file match
+        if target in editable_set:
+            return _allow("Edit stays inside the owned file.")
+        # Check directory prefix match
+        for d in _editable_dirs:
+            try:
+                target.relative_to(d)
+                return _allow(f"Edit inside owned directory {d.name}/.")
+            except ValueError:
+                continue
+        owned = ", ".join(sorted(p.name for p in editable_set))
+        dirs = ", ".join(sorted(d.name + "/" for d in _editable_dirs))
+        desc = f"{owned}, {dirs}" if dirs else owned
+        return _deny(f"Only {desc} may be edited in this turn.")
 
     return restrict_edits
 
@@ -253,6 +264,7 @@ async def run_agent_turn(
     cwd: Path,
     repo_root: Path,
     editable_paths: list[Path],
+    editable_dirs: list[Path] | None = None,
     prompt: str,
     system_prompt: str,
     max_turns: int,
@@ -268,7 +280,8 @@ async def run_agent_turn(
 ) -> tuple[str | None, str]:
     claude_home.mkdir(parents=True, exist_ok=True)
     editable_set = {p.resolve() for p in editable_paths}
-    restrict_edits = make_edit_hook(editable_set, cwd, repo_root)
+    editable_dir_set = {p.resolve() for p in (editable_dirs or [])}
+    restrict_edits = make_edit_hook(editable_set, cwd, repo_root, editable_dir_set)
 
     options = sdk.ClaudeAgentOptions(
         cwd=str(cwd),

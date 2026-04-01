@@ -12,6 +12,7 @@ import hashlib
 import inspect
 import json
 import os
+import sys
 import time
 import types
 from contextlib import contextmanager
@@ -60,6 +61,7 @@ class DualLoopPaths:
     yin_scratchpad_path: Path
     yang_notebook_path: Path
     yin_notebook_path: Path
+    workspace_path: Path
     yang_prompt_path: Path
     yin_prompt_path: Path
     yin_seed_prompt_path: Path
@@ -198,6 +200,7 @@ def dual_loop_paths(
         yin_scratchpad_path=run_root / "yin_scratchpad.md",
         yang_notebook_path=run_root / "yang_notebook.md",
         yin_notebook_path=run_root / "yin_notebook.md",
+        workspace_path=run_root / "workspace",
         yang_prompt_path=resolve_prompt_path(root, "yang_prompt.override.md", "yang_prompt.md", prompt_set),
         yin_prompt_path=resolve_prompt_path(root, "yin_prompt.override.md", "yin_prompt.md", prompt_set),
         yin_seed_prompt_path=resolve_prompt_path(root, "yin_seed_prompt.override.md", "yin_seed_prompt.md", prompt_set),
@@ -244,10 +247,17 @@ def run_environment(paths: DualLoopPaths):
     os.environ["TAIJI_RESULTS_PATH"] = str(paths.results_path)
     os.environ["TAIJI_HISTORY_PATH"] = str(paths.history_path)
     os.environ["TAIJI_YIN_SNAPSHOT_PATH"] = str(paths.yin_snapshot_path)
+    # Add run_root to sys.path so `from workspace.X import Y` works
+    run_root_str = str(paths.run_root)
+    path_added = run_root_str not in sys.path
+    if path_added:
+        sys.path.insert(0, run_root_str)
     with working_directory(paths.run_root):
         try:
             yield
         finally:
+            if path_added and run_root_str in sys.path:
+                sys.path.remove(run_root_str)
             for key, value in previous.items():
                 if value is None:
                     os.environ.pop(key, None)
@@ -289,6 +299,14 @@ def ensure_run_workspace(paths: DualLoopPaths, *, refresh: bool = False) -> None
     ):
         if refresh or not work_path.exists():
             copy_seed_file(seed_path, work_path)
+    # Create workspace for yang's self-built modules
+    paths.workspace_path.mkdir(parents=True, exist_ok=True)
+    init_path = paths.workspace_path / "__init__.py"
+    if not init_path.exists():
+        init_path.write_text("# Yang workspace — importable modules built across iterations\n", encoding="utf-8")
+    manifest_path = paths.workspace_path / "manifest.json"
+    if not manifest_path.exists():
+        write_json(manifest_path, {"modules": {}, "note": "Yang maintains this index of workspace modules."})
 
 
 def validate_zero_arg_signature(fn: Callable[..., Any], label: str) -> None:
@@ -382,13 +400,27 @@ def latest_history_entry(paths: DualLoopPaths) -> dict[str, Any] | None:
     return json.loads(lines[-1])
 
 
-def run_yang(paths: DualLoopPaths, *, persist_results: bool = True) -> JSONObject:
+YANG_TIMEOUT_SECONDS = 300  # 5 minutes default
+
+
+def run_yang(paths: DualLoopPaths, *, persist_results: bool = True, timeout: int = YANG_TIMEOUT_SECONDS) -> JSONObject:
     ensure_run_workspace(paths)
     yang = load_callable(paths.yang_path, "run")
     validate_zero_arg_signature(yang, "yang.run()")
     try:
         with run_environment(paths):
-            raw_results = yang()
+            if timeout > 0:
+                import multiprocessing.pool
+                pool = multiprocessing.pool.ThreadPool(1)
+                async_result = pool.apply_async(yang)
+                try:
+                    raw_results = async_result.get(timeout=timeout)
+                except multiprocessing.TimeoutError:
+                    raw_results = {"error": f"yang.run() timed out after {timeout}s"}
+                finally:
+                    pool.terminate()
+            else:
+                raw_results = yang()
     except Exception as exc:
         raw_results = {"error": f"yang crashed: {type(exc).__name__}: {exc}"}
     results = normalize_results(raw_results)

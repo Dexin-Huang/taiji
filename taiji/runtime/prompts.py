@@ -81,6 +81,7 @@ def prompt_context(paths: Any, root: Path, *, iteration: int | None = None) -> d
         "yin_scratchpad": relative_artifact_path(paths.yin_scratchpad_path, root),
         "yang_notebook": relative_artifact_path(paths.yang_notebook_path, root),
         "yin_notebook": relative_artifact_path(paths.yin_notebook_path, root),
+        "workspace": relative_artifact_path(paths.workspace_path, root),
         "world_file": relative_artifact_path(paths.world_path, root),
         "law_file": relative_artifact_path(paths.law_path, root),
         "results_file": relative_artifact_path(paths.results_path, root),
@@ -109,10 +110,13 @@ def render_system_prompt(path: Path, default_prompt: str, context: dict[str, str
 def default_yang_prompt_template() -> str:
     return """Yang iteration {iteration}.
 
-Own only {yang_file}, {yang_scratchpad}, and {yang_notebook}. Do not edit {yin_file} or any generated file.
+Own {yang_file}, {yang_scratchpad}, {yang_notebook}, and everything under {workspace}/. Do not edit {yin_file} or any generated file.
 You may read {yin_file}, {law_file}, {world_file}, {results_file}, and any generated artifact.
-Use {yang_scratchpad} for this iteration's working notes (cleared each iteration).
-Use {yang_notebook} for persistent cross-iteration memory: what you tried, why it failed, what patterns you see, what to try next. READ IT FIRST every iteration. Write to it after every attempt. This is how you remember.
+
+Memory:
+- {yang_scratchpad}: this iteration's scratch (cleared each iteration)
+- {yang_notebook}: persistent cross-iteration memory. READ IT FIRST. Write what you tried, why it failed, what to try next.
+- {workspace}/: persistent Python modules you build. Import them in {yang_file} with `from workspace.module_name import X`. Create {workspace}/manifest.json to index your modules. These persist and accumulate across iterations — build a library of working components.
 Use run_cycle. It is the only authority on pass or fail.
 
 If run_cycle returns passed=false, revise {yang_file} and run again.

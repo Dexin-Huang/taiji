@@ -70,6 +70,34 @@ async def run_yin_turn(args, **kwargs):
         return await run_agent_turn(sdk=sdk, **kwargs)
 
 
+def _snapshot_workspace(workspace_path: Path) -> dict[str, bytes]:
+    """Capture all files in workspace/ for potential revert."""
+    snapshot = {}
+    if workspace_path.exists():
+        for f in workspace_path.rglob("*"):
+            if f.is_file():
+                key = str(f.relative_to(workspace_path))
+                snapshot[key] = f.read_bytes()
+    return snapshot
+
+
+def _restore_workspace(workspace_path: Path, snapshot: dict[str, bytes]) -> None:
+    """Restore workspace/ to a previous state."""
+    if not workspace_path.exists():
+        return
+    # Remove files not in snapshot
+    for f in list(workspace_path.rglob("*")):
+        if f.is_file():
+            key = str(f.relative_to(workspace_path))
+            if key not in snapshot:
+                f.unlink()
+    # Restore snapshot files
+    for key, data in snapshot.items():
+        target = workspace_path / key
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+
 def configure_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -296,6 +324,8 @@ async def run_loop(args: argparse.Namespace) -> None:
         server = sdk.create_sdk_mcp_server(name="taiji", tools=[run_cycle_tool])
         yang_dir = agent_artifact_dir(iter_dir, "yang")
         yang_before = read_text(paths.yang_path)
+        # Snapshot workspace for potential revert
+        workspace_snapshot = _snapshot_workspace(paths.workspace_path)
         results_before = read_text(paths.results_path) if paths.results_path.exists() else None
         ctx = prompt_context(paths, ROOT, iteration=state.iteration)
         yang_prompt = yang_turn_prompt(paths, ROOT, state.iteration)
@@ -313,6 +343,7 @@ async def run_loop(args: argparse.Namespace) -> None:
         yang_session_id, yang_text = await run_agent_turn(
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
             editable_paths=[paths.yang_path.resolve(), paths.yang_scratchpad_path.resolve(), paths.yang_notebook_path.resolve()],
+            editable_dirs=[paths.workspace_path.resolve()],
             prompt=yang_prompt, system_prompt=yang_sys,
             max_turns=args.yang_max_turns, cli_path=args.cli_path,
             claude_model=args.claude_model, claude_home=yang_home,
@@ -350,6 +381,7 @@ async def run_loop(args: argparse.Namespace) -> None:
         else:
             paths.yang_path.write_text(yang_before, encoding="utf-8")
             restore_results_file(paths, results_before)
+            _restore_workspace(paths.workspace_path, workspace_snapshot)
             keep_decision = {
                 "action": "discard",
                 "reason": "no-run" if cycle_state.last_record is None else "no-improvement",
@@ -576,7 +608,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-path", type=Path, default=None)
     parser.add_argument("--yang-claude-home", type=Path, default=None)
     parser.add_argument("--yin-claude-home", type=Path, default=None)
-    parser.add_argument("--resume-yang-session", action="store_true")
+    parser.add_argument("--resume-yang-session", action="store_true", default=True,
+                        help="Resume yang's Claude session across iterations (default: true)")
+    parser.add_argument("--no-resume-yang-session", action="store_false", dest="resume_yang_session")
     parser.add_argument(
         "--yin-backend",
         choices=("claude", "codex"),
