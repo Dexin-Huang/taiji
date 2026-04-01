@@ -51,6 +51,25 @@ from .sdk_loader import claude_sdk_reference_root, load_claude_agent_sdk
 from .agents import run_agent_turn
 
 
+async def run_yin_turn(args, **kwargs):
+    """Dispatch yin turn to Claude or Codex based on --yin-backend."""
+    if getattr(args, "yin_backend", None) == "codex":
+        from .codex import run_codex_turn
+        editable = kwargs["editable_paths"]
+        cwd = kwargs.get("cwd", ROOT)
+        thread_id, text = await run_codex_turn(
+            cwd=cwd,
+            editable_paths=editable,
+            prompt=kwargs["prompt"],
+            system_prompt=kwargs["system_prompt"],
+            model=getattr(args, "codex_model", None),
+        )
+        return thread_id, text
+    else:
+        sdk = kwargs.pop("sdk")
+        return await run_agent_turn(sdk=sdk, **kwargs)
+
+
 def configure_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -181,7 +200,8 @@ async def run_loop(args: argparse.Namespace) -> None:
                 before_text=yin_snapshot,
                 resumed_session_id=resumed_seed_session_id,
             )
-            seed_resume_session_id, yin_text = await run_agent_turn(
+            seed_resume_session_id, yin_text = await run_yin_turn(
+                args,
                 sdk=sdk, cwd=ROOT, repo_root=ROOT,
                 editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve()],
                 prompt=seed_prompt, system_prompt=seed_sys,
@@ -445,7 +465,8 @@ async def run_loop(args: argparse.Namespace) -> None:
             prompt=yin_prompt, system_prompt=yin_sys,
             before_text=yin_snapshot, resumed_session_id=None,
         )
-        _, yin_text = await run_agent_turn(
+        _, yin_text = await run_yin_turn(
+            args,
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
             editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve()],
             prompt=yin_prompt, system_prompt=yin_sys,
@@ -556,6 +577,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yang-claude-home", type=Path, default=None)
     parser.add_argument("--yin-claude-home", type=Path, default=None)
     parser.add_argument("--resume-yang-session", action="store_true")
+    parser.add_argument(
+        "--yin-backend",
+        choices=("claude", "codex"),
+        default="claude",
+        help="Which model backend to use for yin turns (default: claude)",
+    )
+    parser.add_argument("--codex-model", type=str, default=None, help="Model for codex backend (default: from ~/.codex/config.toml)")
     parser.add_argument(
         "--stop-on-converged",
         action="store_true",
