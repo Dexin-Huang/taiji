@@ -640,7 +640,14 @@ def main() -> None:
     args.run_id = paths.run_id
     if args.state_path is None:
         args.state_path = paths.queue_root / "loop_state.json"
-    anyio.run(run_loop, args)
+    try:
+        anyio.run(run_loop, args)
+    except KeyboardInterrupt:
+        print("\n[taiji] Interrupted. State saved.")
+    except Exception as exc:
+        print(f"\n[taiji] Fatal error: {type(exc).__name__}: {exc}")
+        print("[taiji] State saved. Resume with --run-id to continue.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

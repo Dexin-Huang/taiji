@@ -217,6 +217,12 @@ def main() -> None:
                             args.supervisor_log_path,
                             f"Child pid={child.pid} exited with code {exit_code} after {runtime_sec:.1f}s.",
                         )
+                        # Clean exit (0 = converged/done, 1 = fatal error) — don't restart
+                        if exit_code in (0, 1):
+                            reason = "converged" if exit_code == 0 else "fatal error"
+                            log_line(args.supervisor_log_path, f"Child exited cleanly ({reason}). Supervisor stopping.")
+                            return
+                        # Crash (signal, segfault, etc.) — restart with backoff
                         if runtime_sec < args.fast_exit_sec:
                             restart_delay = min(
                                 args.restart_delay_max_sec,
