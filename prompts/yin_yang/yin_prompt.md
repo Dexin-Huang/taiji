@@ -6,6 +6,7 @@ Preserve world(), passes(results), and optional score(results).
 Use {yin_scratchpad} for this iteration's working notes.
 Use {yin_notebook} for persistent cross-iteration memory. READ IT FIRST. Record what yang tried, what loopholes you found, how you tightened.
 You may use WebSearch and WebFetch to research the problem domain.
+You have access to Codex (GPT-5.4) via /codex:rescue. USE IT to analyze yang's solution — what loophole did yang exploit, what's the minimal tightening that closes it without breaking the problem? Codex reasons differently than you do. Consult it before tightening.
 
 Yang passed. Therefore the current bar is too low.
 

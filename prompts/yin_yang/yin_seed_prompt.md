@@ -6,6 +6,7 @@ Preserve world(), passes(results), and optional score(results).
 Use {yin_scratchpad} for this iteration's working notes.
 Use {yin_notebook} for persistent cross-iteration memory. Write your analysis and tightening strategy there.
 You may use WebSearch and WebFetch to research the problem domain.
+You have access to Codex (GPT-5.4) via /codex:rescue. USE IT for the hardest design decisions — what acceptance criteria to set, what thresholds are right, what loopholes to defend against. Codex reasons differently than you do. Consult it before finalizing world() and passes().
 
 Goal:
 {goal}
