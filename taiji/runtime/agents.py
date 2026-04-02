@@ -311,28 +311,42 @@ async def run_agent_turn(
     assistant_lines: list[str] = []
     conversation_log: list[dict[str, Any]] = []
     final_session_id: str | None = None
-    async with sdk.ClaudeSDKClient(options=options) as client:
-        await client.query(prompt, session_id=session_id)
-        async for message in client.receive_response():
-            if isinstance(message, sdk.AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, sdk.TextBlock):
-                        text = block.text.strip()
-                        if text:
-                            assistant_lines.append(text)
-                            conversation_log.append({"role": "assistant", "text": text})
-                    elif hasattr(block, "name"):
-                        # Tool use block
-                        conversation_log.append({
-                            "role": "tool_call",
-                            "tool": getattr(block, "name", "?"),
-                            "input": str(getattr(block, "input", ""))[:500],
-                        })
-            elif isinstance(message, sdk.ResultMessage):
-                final_session_id = message.session_id
-            else:
-                # Capture tool results and other message types
-                msg_type = type(message).__name__
-                msg_str = str(message)[:500] if len(str(message)) < 1000 else str(message)[:500] + "..."
-                conversation_log.append({"role": msg_type, "content": msg_str})
+
+    import time as _time
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            async with sdk.ClaudeSDKClient(options=options) as client:
+                await client.query(prompt, session_id=session_id)
+                async for message in client.receive_response():
+                    if isinstance(message, sdk.AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, sdk.TextBlock):
+                                text = block.text.strip()
+                                if text:
+                                    assistant_lines.append(text)
+                                    conversation_log.append({"role": "assistant", "text": text})
+                            elif hasattr(block, "name"):
+                                conversation_log.append({
+                                    "role": "tool_call",
+                                    "tool": getattr(block, "name", "?"),
+                                    "input": str(getattr(block, "input", ""))[:500],
+                                })
+                    elif isinstance(message, sdk.ResultMessage):
+                        final_session_id = message.session_id
+                    else:
+                        msg_type = type(message).__name__
+                        msg_str = str(message)[:500] if len(str(message)) < 1000 else str(message)[:500] + "..."
+                        conversation_log.append({"role": msg_type, "content": msg_str})
+            break  # Success
+        except Exception as exc:
+            err_str = str(exc)
+            is_retryable = any(s in err_str for s in ["429", "rate limit", "overloaded", "500", "502", "503"])
+            if is_retryable and attempt < max_retries - 1:
+                wait = 30 * (2 ** attempt)  # 30s, 60s, 120s, 240s
+                print(f"[taiji] API error: {err_str[:200]}. Pausing {wait}s before retry ({attempt+1}/{max_retries})...")
+                _time.sleep(wait)
+                continue
+            raise  # Non-retryable or exhausted retries
+
     return final_session_id, "\n".join(assistant_lines).strip(), conversation_log

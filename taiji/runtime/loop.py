@@ -625,8 +625,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stop-on-converged",
         action="store_true",
-        help="adaptive mode only: stop after a passing iteration where yin makes no change",
+        default=True,
+        help="adaptive mode only: stop after a passing iteration where yin makes no change (default: true)",
     )
+    parser.add_argument("--no-stop-on-converged", action="store_false", dest="stop_on_converged")
     return parser
 
 
