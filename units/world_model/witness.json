@@ -1,0 +1,17 @@
+{
+  "delta": 0.008,
+  "tau": 0.02,
+  "retention": 0.78,
+  "adaptation_gain": 0.06,
+  "inequalities": [
+    "0.90 <= anchor_cosine <= 0.98",
+    "|tau - 6 * delta| <= 0.01",
+    "transition_ratio <= 1.25",
+    "reduction >= 0.22"
+  ],
+  "derived_bounds": {},
+  "sanity_checks": [
+    "closed_form_bounds_only"
+  ],
+  "notes": "This seed should fail tau consistency, transition, and reduction, leaving room for Yang to tighten the witness."
+}

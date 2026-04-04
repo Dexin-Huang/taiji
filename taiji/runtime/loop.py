@@ -32,10 +32,21 @@ from .agents import (
     load_state,
     make_run_librarian_definition,
     read_text,
+    restore_file_set,
     save_state,
+    snapshot_changed,
+    snapshot_file_set,
     write_iteration_summary,
 )
 from .cycle import append_history, dual_loop_paths, ensure_run_workspace, evaluate_yang_trial, seed, validate_yin
+from .frontier import (
+    candidate_envelope_from_paths,
+    frontier_from_legacy,
+    frontier_member_from_record,
+    load_frontier,
+    save_frontier,
+    upsert_incumbent,
+)
 from .ideas import record_seed_idea, record_yang_idea, record_yin_idea
 from .law import evaluate_snapshot, has_materialized_law, load_materialized_snapshot, score_snapshot
 from .prompts import (
@@ -51,9 +62,57 @@ from .sdk_loader import claude_sdk_reference_root, load_claude_agent_sdk
 from .agents import run_agent_turn
 
 
-async def run_yin_turn(args, **kwargs):
-    """Dispatch yin turn to Claude or Codex based on --yin-backend."""
-    if getattr(args, "yin_backend", None) == "codex":
+def problem_kind(paths: Any) -> str:
+    return getattr(paths.config, "problem_kind", "program_search")
+
+
+def yang_selected_paths(paths: Any) -> list[Path]:
+    if problem_kind(paths) == "mechanism_search":
+        return [
+            paths.yang_candidate_path.resolve(),
+            paths.yang_witness_path.resolve(),
+            paths.yang_derivation_path.resolve(),
+            paths.yang_path.resolve(),
+        ]
+    return [paths.yang_path.resolve()]
+
+
+def yang_editable_paths(paths: Any) -> list[Path]:
+    return [
+        *yang_selected_paths(paths),
+        paths.yang_scratchpad_path.resolve(),
+        paths.yang_notebook_path.resolve(),
+    ]
+
+
+def yin_selected_paths(paths: Any) -> list[Path]:
+    selected = [paths.yin_path.resolve()]
+    if problem_kind(paths) == "mechanism_search":
+        selected.extend([
+            paths.yin_problem_spec_path.resolve(),
+            paths.yin_counterexamples_path.resolve(),
+        ])
+    return selected
+
+
+def yin_editable_paths(paths: Any) -> list[Path]:
+    return [
+        *yin_selected_paths(paths),
+        paths.yin_scratchpad_path.resolve(),
+        paths.yin_notebook_path.resolve(),
+    ]
+
+
+def primary_yang_path(paths: Any) -> Path:
+    if problem_kind(paths) == "mechanism_search":
+        return paths.yang_candidate_path
+    return paths.yang_path
+
+
+async def run_role_turn(role: str, args, **kwargs):
+    """Dispatch a role turn to Claude or Codex based on --<role>-backend."""
+    backend = getattr(args, f"{role}_backend", "claude")
+    if backend == "codex":
         from .codex import run_codex_turn
         editable = kwargs["editable_paths"]
         cwd = kwargs.get("cwd", ROOT)
@@ -63,12 +122,20 @@ async def run_yin_turn(args, **kwargs):
             prompt=kwargs["prompt"],
             system_prompt=kwargs["system_prompt"],
             model=getattr(args, "codex_model", None),
+            service_name=f"taiji_{role}",
         )
         return thread_id, text, []
-    else:
-        sdk = kwargs.pop("sdk")
-        sid, text, log = await run_agent_turn(sdk=sdk, **kwargs)
-        return sid, text, log
+    sdk = kwargs.pop("sdk")
+    sid, text, log = await run_agent_turn(sdk=sdk, **kwargs)
+    return sid, text, log
+
+
+async def run_yin_turn(args, **kwargs):
+    return await run_role_turn("yin", args, **kwargs)
+
+
+async def run_yang_turn(args, **kwargs):
+    return await run_role_turn("yang", args, **kwargs)
 
 
 def _snapshot_workspace(workspace_path: Path) -> dict[str, bytes]:
@@ -112,13 +179,22 @@ def baseline_record_from_state(state: DualLoopState, *, source_hash: str) -> dic
     if state.yang_kept_passed is None:
         return None
     return {
+        "candidate_id": state.yang_kept_candidate_id,
         "passed": bool(state.yang_kept_passed),
         "score": state.yang_kept_score or {"order": [], "summary": {}},
         "source_hash": source_hash,
     }
 
 
-def update_kept_state_from_record(state: DualLoopState, record: dict[str, Any], *, source_hash: str) -> None:
+def update_kept_state_from_record(
+    state: DualLoopState,
+    record: dict[str, Any],
+    *,
+    source_hash: str,
+    candidate_id: str | None = None,
+) -> None:
+    if candidate_id is not None:
+        state.yang_kept_candidate_id = candidate_id
     state.yang_kept_passed = bool(record.get("passed"))
     state.yang_kept_score = dict(record.get("score", {"order": [], "summary": {}}))
     state.yang_kept_source_hash = source_hash
@@ -137,6 +213,51 @@ def ensure_yang_baseline(paths: Any, current_law: Any, state: DualLoopState) -> 
     )
     update_kept_state_from_record(state, baseline, source_hash=current_law.source_hash)
     return baseline
+
+
+def ensure_frontier_state(paths: Any, state: DualLoopState) -> Any:
+    frontier = load_frontier(paths)
+    if frontier is not None:
+        return frontier
+    frontier = frontier_from_legacy(paths, state=state)
+    save_frontier(paths, frontier)
+    return frontier
+
+
+def artifact_ref(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else str(path)
+
+
+def persist_incumbent_frontier(
+    paths: Any,
+    frontier: Any,
+    record: dict[str, Any],
+    *,
+    source_hash: str,
+    candidate_id: str,
+    parent_ids: list[str] | tuple[str, ...] | None = None,
+) -> Any:
+    existing = next((candidate for candidate in frontier.candidates if candidate.candidate_id == candidate_id), None)
+    eval_refs = [artifact_ref(paths.results_path)] if paths.results_path.exists() else []
+    updated = upsert_incumbent(
+        frontier,
+        envelope=candidate_envelope_from_paths(
+            paths,
+            candidate_id=candidate_id,
+            parent_ids=tuple(parent_ids or (existing.parent_ids if existing is not None else ())),
+            law_source_hash=source_hash,
+            eval_refs=eval_refs,
+            status="active",
+            created_at=None if existing is None else existing.created_at,
+        ),
+        member=frontier_member_from_record(
+            record,
+            candidate_id=candidate_id,
+            last_eval_ref=eval_refs[0] if eval_refs else None,
+        ),
+    )
+    save_frontier(paths, updated)
+    return updated
 
 
 def restore_results_file(paths: Any, previous_text: str | None) -> None:
@@ -174,6 +295,7 @@ async def run_loop(args: argparse.Namespace) -> None:
     queue_root = paths.queue_root
     queue_root.mkdir(parents=True, exist_ok=True)
     state = load_state(args.state_path)
+    frontier = ensure_frontier_state(paths, state)
     sdk = load_claude_agent_sdk()
 
     slug = session_slug(paths.run_root, ROOT)
@@ -208,6 +330,7 @@ async def run_loop(args: argparse.Namespace) -> None:
                 artifact_dir(queue_root, f"seed-attempt-{seed_attempt:04d}"),
                 "yin",
             )
+            yin_selected_snapshot = snapshot_file_set(yin_selected_paths(paths))
             yin_snapshot = paths.yin_path.read_text(encoding="utf-8")
             ctx = prompt_context(paths, ROOT)
             seed_prompt = seed_retry_prompt(
@@ -217,7 +340,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             )
             seed_sys = render_system_prompt(
                 paths.yin_system_prompt_path,
-                "You are yin. Own {yin_file} and nothing else.",
+                "You are yin. Own the current yin artifacts and nothing else.",
                 ctx,
             )
             resumed_seed_session_id = seed_resume_session_id
@@ -232,7 +355,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             seed_resume_session_id, yin_text, yin_log = await run_yin_turn(
                 args,
                 sdk=sdk, cwd=ROOT, repo_root=ROOT,
-                editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve(), paths.yin_notebook_path.resolve()],
+                editable_paths=yin_editable_paths(paths),
                 prompt=seed_prompt, system_prompt=seed_sys,
                 max_turns=args.yin_max_turns, cli_path=args.cli_path,
                 claude_model=args.claude_model, claude_home=yin_home,
@@ -256,7 +379,7 @@ async def run_loop(args: argparse.Namespace) -> None:
                 seed_record = seed(paths)
             except Exception as exc:
                 seed_validation_error = exc
-                paths.yin_path.write_text(yin_snapshot, encoding="utf-8")
+                restore_file_set(yin_selected_snapshot)
                 (attempt_dir / "validation_error.txt").write_text(
                     f"{type(exc).__name__}: {exc}\n",
                     encoding="utf-8",
@@ -267,7 +390,7 @@ async def run_loop(args: argparse.Namespace) -> None:
                     "status": "validation_failed",
                     "mode": args.mode,
                     "error": f"{type(exc).__name__}: {exc}",
-                    "yin_changed": yin_snapshot != yin_after,
+                    "yin_changed": snapshot_changed(yin_selected_snapshot),
                 })
                 print(f"Seed validation failed on attempt {seed_attempt}: {type(exc).__name__}: {exc}")
                 print("Reverted yin.py and retrying seed.")
@@ -280,14 +403,14 @@ async def run_loop(args: argparse.Namespace) -> None:
                 ROOT,
                 artifact_dir=seed_dir,
                 response=yin_text,
-                changed=yin_snapshot != yin_after,
+                changed=snapshot_changed(yin_selected_snapshot),
                 world=world,
             )
             write_iteration_summary(seed_dir, {
                 "phase": "seed",
                 "mode": args.mode,
                 "record": seed_record,
-                "yin_changed": yin_snapshot != yin_after,
+                "yin_changed": snapshot_changed(yin_selected_snapshot),
                 "attempts": seed_attempt,
             })
             break
@@ -309,10 +432,26 @@ async def run_loop(args: argparse.Namespace) -> None:
         current_world = current_law.world
         write_json(iter_dir / "world_before.json", current_world)
         baseline = ensure_yang_baseline(paths, current_law, state)
+        if frontier.incumbent_candidate_id is None:
+            candidate_id = state.yang_kept_candidate_id or "incumbent"
+            update_kept_state_from_record(
+                state,
+                baseline,
+                source_hash=current_law.source_hash,
+                candidate_id=candidate_id,
+            )
+            frontier = persist_incumbent_frontier(
+                paths,
+                frontier,
+                baseline,
+                source_hash=current_law.source_hash,
+                candidate_id=candidate_id,
+            )
         cycle_state = YangCycleState(
             paths=paths,
             max_calls=args.yang_max_cycle_calls,
             law=current_law,
+            selection_paths=yang_selected_paths(paths),
             artifact_dir=iter_dir,
             baseline_record=baseline,
         )
@@ -325,13 +464,19 @@ async def run_loop(args: argparse.Namespace) -> None:
 
         server = sdk.create_sdk_mcp_server(name="taiji", tools=[run_cycle_tool])
         yang_dir = agent_artifact_dir(iter_dir, "yang")
-        yang_before = read_text(paths.yang_path)
+        yang_primary_path = primary_yang_path(paths)
+        yang_before = read_text(yang_primary_path)
+        yang_selected_snapshot = snapshot_file_set(yang_selected_paths(paths))
         # Snapshot workspace for potential revert
         workspace_snapshot = _snapshot_workspace(paths.workspace_path)
         results_before = read_text(paths.results_path) if paths.results_path.exists() else None
         ctx = prompt_context(paths, ROOT, iteration=state.iteration)
         yang_prompt = yang_turn_prompt(paths, ROOT, state.iteration)
-        yang_sys = render_system_prompt(paths.yang_system_prompt_path, "You are yang. Own {yang_file} and nothing else.", ctx)
+        yang_sys = render_system_prompt(
+            paths.yang_system_prompt_path,
+            "You are yang. Own the current yang artifacts and nothing else.",
+            ctx,
+        )
         yang_agents = {
             RUN_LIBRARIAN_AGENT_NAME: make_run_librarian_definition(sdk, paths, ROOT),
         }
@@ -342,9 +487,10 @@ async def run_loop(args: argparse.Namespace) -> None:
             before_text=yang_before,
             resumed_session_id=resumed_yang_session_id,
         )
-        yang_session_id, yang_text, yang_log = await run_agent_turn(
+        yang_session_id, yang_text, yang_log = await run_yang_turn(
+            args,
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
-            editable_paths=[paths.yang_path.resolve(), paths.yang_scratchpad_path.resolve(), paths.yang_notebook_path.resolve()],
+            editable_paths=yang_editable_paths(paths),
             editable_dirs=[paths.workspace_path.resolve()],
             prompt=yang_prompt, system_prompt=yang_sys,
             max_turns=args.yang_max_turns, cli_path=args.cli_path,
@@ -358,7 +504,7 @@ async def run_loop(args: argparse.Namespace) -> None:
         )
         if yang_text:
             print(yang_text)
-        yang_turn_end = read_text(paths.yang_path)
+        yang_turn_end = read_text(yang_primary_path)
         if yang_session_id is not None:
             state.yang_session_id = yang_session_id
 
@@ -369,11 +515,28 @@ async def run_loop(args: argparse.Namespace) -> None:
         attempted_yang_text = cycle_state.best_yang_text if cycle_state.best_record is not None else yang_turn_end
         if kept_new_candidate:
             assert cycle_state.best_record is not None
-            assert cycle_state.best_yang_text is not None
-            paths.yang_path.write_text(cycle_state.best_yang_text, encoding="utf-8")
+            assert cycle_state.best_selection_snapshot is not None
+            kept_candidate_id = f"yang-{state.iteration:06d}"
+            restore_file_set(cycle_state.best_selection_snapshot)
             write_json(paths.results_path, cycle_state.best_record["results"])
             active_record = cycle_state.best_record
-            update_kept_state_from_record(state, active_record, source_hash=current_law.source_hash)
+            update_kept_state_from_record(
+                state,
+                active_record,
+                source_hash=current_law.source_hash,
+                candidate_id=kept_candidate_id,
+            )
+            parent_ids = []
+            if frontier.incumbent_candidate_id is not None and frontier.incumbent_candidate_id != kept_candidate_id:
+                parent_ids.append(frontier.incumbent_candidate_id)
+            frontier = persist_incumbent_frontier(
+                paths,
+                frontier,
+                active_record,
+                source_hash=current_law.source_hash,
+                candidate_id=kept_candidate_id,
+                parent_ids=parent_ids,
+            )
             keep_decision = {
                 "action": "keep",
                 "reason": "passed" if bool(active_record["passed"]) else "score-improved",
@@ -381,9 +544,10 @@ async def run_loop(args: argparse.Namespace) -> None:
                 "active": active_record,
             }
         else:
-            paths.yang_path.write_text(yang_before, encoding="utf-8")
+            restore_file_set(yang_selected_snapshot)
             restore_results_file(paths, results_before)
             _restore_workspace(paths.workspace_path, workspace_snapshot)
+            save_frontier(paths, frontier)
             keep_decision = {
                 "action": "discard",
                 "reason": "no-run" if cycle_state.last_record is None else "no-improvement",
@@ -391,7 +555,7 @@ async def run_loop(args: argparse.Namespace) -> None:
                 "active": baseline,
             }
 
-        yang_after = read_text(paths.yang_path)
+        yang_after = read_text(yang_primary_path)
         finish_agent_turn_logging(
             agent_dir=yang_dir, file_label="yang",
             response=yang_text, before_text=yang_before, after_text=yang_after,
@@ -491,10 +655,15 @@ async def run_loop(args: argparse.Namespace) -> None:
         print("Yang passed. Adaptive mode wakes yin to refine the world or the pass condition.")
         previous_world = record.get("world", {})
         yin_dir = agent_artifact_dir(iter_dir, "yin")
+        yin_selected_snapshot = snapshot_file_set(yin_selected_paths(paths))
         yin_snapshot = paths.yin_path.read_text(encoding="utf-8")
         ctx = prompt_context(paths, ROOT, iteration=state.iteration)
         yin_prompt = yin_turn_prompt(paths, ROOT, state.iteration)
-        yin_sys = render_system_prompt(paths.yin_system_prompt_path, "You are yin. Own {yin_file} and nothing else.", ctx)
+        yin_sys = render_system_prompt(
+            paths.yin_system_prompt_path,
+            "You are yin. Own the current yin artifacts and nothing else.",
+            ctx,
+        )
         begin_agent_turn_logging(
             agent_dir=yin_dir, file_label="yin",
             prompt=yin_prompt, system_prompt=yin_sys,
@@ -503,7 +672,7 @@ async def run_loop(args: argparse.Namespace) -> None:
         _, yin_text, yin_log = await run_yin_turn(
             args,
             sdk=sdk, cwd=ROOT, repo_root=ROOT,
-            editable_paths=[paths.yin_path.resolve(), paths.yin_scratchpad_path.resolve(), paths.yin_notebook_path.resolve()],
+            editable_paths=yin_editable_paths(paths),
             prompt=yin_prompt, system_prompt=yin_sys,
             max_turns=args.yin_max_turns, cli_path=args.cli_path,
             claude_model=args.claude_model, claude_home=yin_home,
@@ -520,7 +689,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             probe_passed = validation.probe_passed
             probe_score = validation.probe_score
         except Exception as exc:
-            paths.yin_path.write_text(yin_snapshot, encoding="utf-8")
+            restore_file_set(yin_selected_snapshot)
             active_law = load_materialized_snapshot(paths)
             world = active_law.world
             probe_passed = evaluate_snapshot(paths, active_law, record["results"])
@@ -535,7 +704,7 @@ async def run_loop(args: argparse.Namespace) -> None:
             session_id=yin_session_name, resumed_session_id=None,
             conversation_log=yin_log,
         )
-        yin_changed = yin_after != yin_snapshot
+        yin_changed = snapshot_changed(yin_selected_snapshot)
         world_changed = world != previous_world
         if adaptive_status != "reverted" and not yin_changed and not world_changed:
             adaptive_status = "no_change"
@@ -579,6 +748,14 @@ async def run_loop(args: argparse.Namespace) -> None:
             state,
             {"passed": probe_passed, "score": probe_score.to_json()},
             source_hash=active_law.source_hash,
+            candidate_id=state.yang_kept_candidate_id,
+        )
+        frontier = persist_incumbent_frontier(
+            paths,
+            frontier,
+            {"passed": probe_passed, "score": probe_score.to_json()},
+            source_hash=active_law.source_hash,
+            candidate_id=state.yang_kept_candidate_id or frontier.incumbent_candidate_id or "incumbent",
         )
         save_state(args.state_path, state)
 
@@ -616,12 +793,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Resume yang's Claude session across iterations (default: true)")
     parser.add_argument("--no-resume-yang-session", action="store_false", dest="resume_yang_session")
     parser.add_argument(
+        "--yang-backend",
+        choices=("claude", "codex"),
+        default="claude",
+        help="Which model backend to use for yang turns (default: claude)",
+    )
+    parser.add_argument(
         "--yin-backend",
         choices=("claude", "codex"),
         default="claude",
         help="Which model backend to use for yin turns (default: claude)",
     )
-    parser.add_argument("--codex-model", type=str, default=None, help="Model for codex backend (default: from ~/.codex/config.toml)")
+    parser.add_argument("--codex-model", type=str, default=None, help="Model for codex backend(s) (default: from ~/.codex/config.toml)")
     parser.add_argument(
         "--stop-on-converged",
         action="store_true",

@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .bootstrap import bootstrap_unit, resolve_new_unit_root
-from .config import UNIT_CONFIG_NAME, UnitConfig, load_unit_config, resolve_prompt_path
+from .config import (
+    DEFAULT_PROBLEM_KIND,
+    MECHANISM_SEARCH_KIND,
+    UNIT_CONFIG_NAME,
+    UnitConfig,
+    load_unit_config,
+    resolve_prompt_path,
+)
 from .law import (
     LawSnapshot,
     YinValidation,
@@ -55,8 +62,18 @@ class DualLoopPaths:
     prompt_path: Path
     yang_seed_path: Path
     yin_seed_path: Path
+    yang_candidate_seed_path: Path
+    yang_witness_seed_path: Path
+    yang_derivation_seed_path: Path
+    yin_problem_spec_seed_path: Path
+    yin_counterexamples_seed_path: Path
     yang_path: Path
     yin_path: Path
+    yang_candidate_path: Path
+    yang_witness_path: Path
+    yang_derivation_path: Path
+    yin_problem_spec_path: Path
+    yin_counterexamples_path: Path
     yang_scratchpad_path: Path
     yin_scratchpad_path: Path
     yang_notebook_path: Path
@@ -183,6 +200,11 @@ def dual_loop_paths(
     selected_run_id = resolve_run_id(root, run_id, create_run=create_run, new_run=new_run)
     run_root = resolve_run_root(root, selected_run_id)
     prompt_set = config.prompt_set
+    yang_candidate_entry = getattr(config, "yang_candidate_entry", "candidate.json")
+    yang_witness_entry = getattr(config, "yang_witness_entry", "witness.json")
+    yang_derivation_entry = getattr(config, "yang_derivation_entry", "derivation.md")
+    yin_problem_spec_entry = getattr(config, "yin_problem_spec_entry", "problem_spec.md")
+    yin_counterexamples_entry = getattr(config, "yin_counterexamples_entry", "counterexamples.md")
     return DualLoopPaths(
         unit_root=root,
         unit_config_path=root / UNIT_CONFIG_NAME,
@@ -194,8 +216,18 @@ def dual_loop_paths(
         prompt_path=root / config.prompt_entry,
         yang_seed_path=root / config.yang_entry,
         yin_seed_path=root / config.yin_entry,
+        yang_candidate_seed_path=root / yang_candidate_entry,
+        yang_witness_seed_path=root / yang_witness_entry,
+        yang_derivation_seed_path=root / yang_derivation_entry,
+        yin_problem_spec_seed_path=root / yin_problem_spec_entry,
+        yin_counterexamples_seed_path=root / yin_counterexamples_entry,
         yang_path=run_root / config.yang_entry,
         yin_path=run_root / config.yin_entry,
+        yang_candidate_path=run_root / yang_candidate_entry,
+        yang_witness_path=run_root / yang_witness_entry,
+        yang_derivation_path=run_root / yang_derivation_entry,
+        yin_problem_spec_path=run_root / yin_problem_spec_entry,
+        yin_counterexamples_path=run_root / yin_counterexamples_entry,
         yang_scratchpad_path=run_root / "yang_scratchpad.md",
         yin_scratchpad_path=run_root / "yin_scratchpad.md",
         yang_notebook_path=run_root / "yang_notebook.md",
@@ -238,6 +270,11 @@ def run_environment(paths: DualLoopPaths):
         "TAIJI_RESULTS_PATH": os.environ.get("TAIJI_RESULTS_PATH"),
         "TAIJI_HISTORY_PATH": os.environ.get("TAIJI_HISTORY_PATH"),
         "TAIJI_YIN_SNAPSHOT_PATH": os.environ.get("TAIJI_YIN_SNAPSHOT_PATH"),
+        "TAIJI_CANDIDATE_PATH": os.environ.get("TAIJI_CANDIDATE_PATH"),
+        "TAIJI_WITNESS_PATH": os.environ.get("TAIJI_WITNESS_PATH"),
+        "TAIJI_DERIVATION_PATH": os.environ.get("TAIJI_DERIVATION_PATH"),
+        "TAIJI_PROBLEM_SPEC_PATH": os.environ.get("TAIJI_PROBLEM_SPEC_PATH"),
+        "TAIJI_COUNTEREXAMPLES_PATH": os.environ.get("TAIJI_COUNTEREXAMPLES_PATH"),
     }
     paths.run_root.mkdir(parents=True, exist_ok=True)
     os.environ["TAIJI_UNIT_ROOT"] = str(paths.unit_root)
@@ -247,6 +284,11 @@ def run_environment(paths: DualLoopPaths):
     os.environ["TAIJI_RESULTS_PATH"] = str(paths.results_path)
     os.environ["TAIJI_HISTORY_PATH"] = str(paths.history_path)
     os.environ["TAIJI_YIN_SNAPSHOT_PATH"] = str(paths.yin_snapshot_path)
+    os.environ["TAIJI_CANDIDATE_PATH"] = str(paths.yang_candidate_path)
+    os.environ["TAIJI_WITNESS_PATH"] = str(paths.yang_witness_path)
+    os.environ["TAIJI_DERIVATION_PATH"] = str(paths.yang_derivation_path)
+    os.environ["TAIJI_PROBLEM_SPEC_PATH"] = str(paths.yin_problem_spec_path)
+    os.environ["TAIJI_COUNTEREXAMPLES_PATH"] = str(paths.yin_counterexamples_path)
     # Add run_root to sys.path so `from workspace.X import Y` works
     run_root_str = str(paths.run_root)
     path_added = run_root_str not in sys.path
@@ -296,7 +338,14 @@ def ensure_run_workspace(paths: DualLoopPaths, *, refresh: bool = False) -> None
     for seed_path, work_path in (
         (paths.yang_seed_path, paths.yang_path),
         (paths.yin_seed_path, paths.yin_path),
+        (paths.yang_candidate_seed_path, paths.yang_candidate_path),
+        (paths.yang_witness_seed_path, paths.yang_witness_path),
+        (paths.yang_derivation_seed_path, paths.yang_derivation_path),
+        (paths.yin_problem_spec_seed_path, paths.yin_problem_spec_path),
+        (paths.yin_counterexamples_seed_path, paths.yin_counterexamples_path),
     ):
+        if not seed_path.exists():
+            continue
         if refresh or not work_path.exists():
             copy_seed_file(seed_path, work_path)
     # Create workspace for yang's self-built modules
@@ -403,22 +452,56 @@ def latest_history_entry(paths: DualLoopPaths) -> dict[str, Any] | None:
 YANG_TIMEOUT_SECONDS = 300  # 5 minutes default
 
 
-def run_yang(paths: DualLoopPaths, *, persist_results: bool = True, timeout: int = YANG_TIMEOUT_SECONDS) -> JSONObject:
+def mechanism_search_results(paths: DualLoopPaths, *, persist_results: bool = True) -> JSONObject:
+    try:
+        candidate = ensure_json_object(
+            paths.yang_candidate_path.name,
+            json.loads(paths.yang_candidate_path.read_text(encoding="utf-8")),
+        )
+        witness = ensure_json_object(
+            paths.yang_witness_path.name,
+            json.loads(paths.yang_witness_path.read_text(encoding="utf-8")),
+        )
+        derivation = paths.yang_derivation_path.read_text(encoding="utf-8").strip()
+        implementation_exists = paths.yang_path.exists()
+        results: JSONObject = {
+            "candidate": candidate,
+            "witness": witness,
+            "derivation": derivation,
+            "artifacts": {
+                "candidate_path": str(paths.yang_candidate_path),
+                "witness_path": str(paths.yang_witness_path),
+                "derivation_path": str(paths.yang_derivation_path),
+                "implementation_path": str(paths.yang_path),
+                "implementation_exists": implementation_exists,
+            },
+            "yang_contract_ok": True,
+        }
+    except Exception as exc:
+        results = {
+            "error": f"mechanism artifact invalid: {type(exc).__name__}: {exc}",
+            "yang_contract_ok": False,
+        }
+    if persist_results:
+        write_json(paths.results_path, results)
+    return results
+
+
+def run_program_search(paths: DualLoopPaths, *, persist_results: bool = True, timeout: int = YANG_TIMEOUT_SECONDS) -> JSONObject:
     ensure_run_workspace(paths)
     yang = load_callable(paths.yang_path, "run")
     validate_zero_arg_signature(yang, "yang.run()")
     try:
         with run_environment(paths):
             if timeout > 0:
-                import multiprocessing.pool
-                pool = multiprocessing.pool.ThreadPool(1)
-                async_result = pool.apply_async(yang)
-                try:
-                    raw_results = async_result.get(timeout=timeout)
-                except multiprocessing.TimeoutError:
-                    raw_results = {"error": f"yang.run() timed out after {timeout}s"}
-                finally:
-                    pool.terminate()
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(yang)
+                    try:
+                        raw_results = future.result(timeout=timeout)
+                    except concurrent.futures.TimeoutError:
+                        raw_results = {"error": f"yang.run() timed out after {timeout}s"}
             else:
                 raw_results = yang()
     except Exception as exc:
@@ -427,6 +510,14 @@ def run_yang(paths: DualLoopPaths, *, persist_results: bool = True, timeout: int
     if persist_results:
         write_json(paths.results_path, results)
     return results
+
+
+def run_yang(paths: DualLoopPaths, *, persist_results: bool = True, timeout: int = YANG_TIMEOUT_SECONDS) -> JSONObject:
+    problem_kind = getattr(paths.config, "problem_kind", "program_search")
+    if problem_kind == "mechanism_search":
+        ensure_run_workspace(paths)
+        return mechanism_search_results(paths, persist_results=persist_results)
+    return run_program_search(paths, persist_results=persist_results, timeout=timeout)
 
 
 def evaluate_yang_trial(
@@ -551,8 +642,18 @@ def status(paths: DualLoopPaths) -> dict[str, Any]:
         "prompt_path": str(paths.prompt_path),
         "yang_seed_path": str(paths.yang_seed_path),
         "yin_seed_path": str(paths.yin_seed_path),
+        "yang_candidate_seed_path": str(paths.yang_candidate_seed_path),
+        "yang_witness_seed_path": str(paths.yang_witness_seed_path),
+        "yang_derivation_seed_path": str(paths.yang_derivation_seed_path),
+        "yin_problem_spec_seed_path": str(paths.yin_problem_spec_seed_path),
+        "yin_counterexamples_seed_path": str(paths.yin_counterexamples_seed_path),
         "yang_path": str(paths.yang_path),
         "yin_path": str(paths.yin_path),
+        "yang_candidate_path": str(paths.yang_candidate_path),
+        "yang_witness_path": str(paths.yang_witness_path),
+        "yang_derivation_path": str(paths.yang_derivation_path),
+        "yin_problem_spec_path": str(paths.yin_problem_spec_path),
+        "yin_counterexamples_path": str(paths.yin_counterexamples_path),
         "yang_scratchpad_path": str(paths.yang_scratchpad_path),
         "yin_scratchpad_path": str(paths.yin_scratchpad_path),
         "yang_prompt_path": str(paths.yang_prompt_path),
@@ -571,10 +672,16 @@ def status(paths: DualLoopPaths) -> dict[str, Any]:
         "config": {
             "name": paths.config.name,
             "kind": paths.config.kind,
+            "problem_kind": getattr(paths.config, "problem_kind", "program_search"),
             "prompt_set": paths.config.prompt_set,
             "prompt_entry": paths.config.prompt_entry,
             "yang_entry": paths.config.yang_entry,
             "yin_entry": paths.config.yin_entry,
+            "yang_candidate_entry": getattr(paths.config, "yang_candidate_entry", "candidate.json"),
+            "yang_witness_entry": getattr(paths.config, "yang_witness_entry", "witness.json"),
+            "yang_derivation_entry": getattr(paths.config, "yang_derivation_entry", "derivation.md"),
+            "yin_problem_spec_entry": getattr(paths.config, "yin_problem_spec_entry", "problem_spec.md"),
+            "yin_counterexamples_entry": getattr(paths.config, "yin_counterexamples_entry", "counterexamples.md"),
         },
         "latest": entry,
     }
@@ -602,6 +709,12 @@ def build_parser() -> argparse.ArgumentParser:
     new_parser.add_argument("target", help="Unit name under units/ or explicit unit path")
     new_parser.add_argument("--goal", type=str, default=None, help="Goal text written into prompt.md")
     new_parser.add_argument("--prompt-file", type=Path, default=None, help="Read prompt.md content from a file")
+    new_parser.add_argument(
+        "--problem-kind",
+        choices=(DEFAULT_PROBLEM_KIND, MECHANISM_SEARCH_KIND),
+        default=DEFAULT_PROBLEM_KIND,
+        help="Problem surface to scaffold. mechanism_search creates candidate/witness/derivation artifacts.",
+    )
     new_parser.add_argument("--force", action="store_true", help="Overwrite scaffolded files if they already exist")
     new_parser.add_argument("--no-readme", action="store_true", help="Do not create README.md")
 
@@ -626,6 +739,7 @@ def main() -> None:
         payload = bootstrap_unit(
             resolve_new_unit_root(args.target),
             prompt_text=prompt_text_from_args(args.goal, args.prompt_file),
+            problem_kind=args.problem_kind,
             force=args.force,
             include_readme=not args.no_readme,
             require_prompt=False,

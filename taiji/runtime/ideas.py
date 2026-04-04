@@ -8,7 +8,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .schema import append_ndjson, read_ndjson, write_json
+from .frontier import update_frontier_idea_summary
+from .schema import append_ndjson, read_ndjson
 from .prompts import relative_artifact_path, summarize_response
 
 
@@ -77,14 +78,15 @@ def materialize_frontier(paths: Any) -> None:
         if r.get("agent") == "yang" and r.get("status") in {"failed", "discarded"}
     ]
     tag_counts = Counter(tag for r in records for tag in r.get("tags", []))
-    write_json(paths.frontier_path, {
+    summary = {
         "latest": compact_idea_record(latest) if latest else None,
         "latest_yang": compact_idea_record(latest_yang) if latest_yang else None,
         "latest_yin": compact_idea_record(latest_yin) if latest_yin else None,
         "recent": [compact_idea_record(r) for r in records[-10:]],
         "open_failed_ideas": [compact_idea_record(r) for r in failed_yang[-10:]],
         "tag_counts": dict(sorted(tag_counts.items())),
-    })
+    }
+    update_frontier_idea_summary(paths, summary)
 
 
 def record_seed_idea(

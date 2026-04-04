@@ -40,6 +40,7 @@ class DualLoopState:
     yang_session_id: str | None = None
     last_phase: str | None = None
     last_passed: bool | None = None
+    yang_kept_candidate_id: str | None = None
     yang_kept_passed: bool | None = None
     yang_kept_score: dict[str, Any] | None = None
     yang_kept_source_hash: str | None = None
@@ -50,12 +51,14 @@ class YangCycleState:
     paths: Any
     max_calls: int
     law: Any
+    selection_paths: list[Path] | None = None
     artifact_dir: Path | None = None
     baseline_record: dict[str, Any] | None = None
     calls: int = 0
     last_record: dict[str, Any] | None = None
     best_record: dict[str, Any] | None = None
     best_yang_text: str | None = None
+    best_selection_snapshot: dict[str, bytes | None] | None = None
 
     async def run(self, note: str) -> dict[str, Any]:
         if self.calls >= self.max_calls:
@@ -71,11 +74,13 @@ class YangCycleState:
             phase="trial",
         )
         self.last_record = record
-        current_yang = read_text(self.paths.yang_path)
+        primary_path = (self.selection_paths or [self.paths.yang_path])[0]
+        current_yang = read_text(primary_path)
         current_best = self.baseline_record if self.best_record is None else self.best_record
         if trial_beats(record, current_best):
             self.best_record = record
             self.best_yang_text = current_yang
+            self.best_selection_snapshot = snapshot_file_set(self.selection_paths or [self.paths.yang_path])
         payload = {
             "note": note,
             "passed": record["passed"],
@@ -139,6 +144,33 @@ def save_state(path: Path, state: DualLoopState) -> None:
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def snapshot_file_set(paths: list[Path]) -> dict[str, bytes | None]:
+    snapshot: dict[str, bytes | None] = {}
+    for path in paths:
+        resolved = str(path.resolve())
+        snapshot[resolved] = path.read_bytes() if path.exists() else None
+    return snapshot
+
+
+def restore_file_set(snapshot: dict[str, bytes | None]) -> None:
+    for raw_path, content in snapshot.items():
+        path = Path(raw_path)
+        if content is None:
+            path.unlink(missing_ok=True)
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+
+def snapshot_changed(snapshot: dict[str, bytes | None]) -> bool:
+    for raw_path, previous in snapshot.items():
+        path = Path(raw_path)
+        current = path.read_bytes() if path.exists() else None
+        if current != previous:
+            return True
+    return False
 
 
 def ensure_text_file(path: Path, initial_text: str = "") -> None:

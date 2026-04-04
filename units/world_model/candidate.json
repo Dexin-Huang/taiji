@@ -1,0 +1,12 @@
+{
+  "mechanism": "ema_retained_fast_weights",
+  "encoder_rule": "ema_target",
+  "predictor_rule": "linear_residual",
+  "fast_weight_rule": "retained_delta",
+  "consolidation_rule": "ema_consolidation",
+  "carry_across_shift": true,
+  "shared_latent_space": true,
+  "latent_rank": 4,
+  "component_count": 4,
+  "notes": "Starting point: the family is plausible, but the witness is intentionally too weak to pass."
+}

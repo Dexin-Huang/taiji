@@ -1,8 +1,14 @@
 name = "world_model"
 kind = "yin_yang"
-prompt_set = "yin_yang"
+problem_kind = "mechanism_search"
+prompt_set = "mechanism_search"
 
 [entry]
 prompt = "prompt.md"
-yang = "yang.py"
+yang = "implementation.py"
 yin = "yin.py"
+candidate = "candidate.json"
+witness = "witness.json"
+derivation = "derivation.md"
+problem_spec = "problem_spec.md"
+counterexamples = "counterexamples.md"

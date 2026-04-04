@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
+import re
 from pathlib import Path
 from typing import Any
 
@@ -128,16 +130,134 @@ class CodexAppServer:
         return out
 
 
-import re
+def _normalize_path_key(path: Path) -> str:
+    return os.path.normcase(str(path.resolve()))
 
 
-def _extract_code_block(text: str) -> str | None:
-    """Extract the first ```python ... ``` block from text."""
+def _resolve_edit_path(raw_path: str, cwd: Path) -> Path:
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    return candidate.resolve()
+
+
+def _extract_fenced_blocks(text: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    pattern = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
+    for match in pattern.finditer(text):
+        lang = match.group(1).strip().lower()
+        body = match.group(2).strip()
+        blocks.append((lang, body))
+    return blocks
+
+
+def _extract_json_substring(text: str) -> str | None:
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return None
+
+
+def _load_json_payload(text: str) -> Any | None:
+    candidates: list[str] = []
+    for lang, body in _extract_fenced_blocks(text):
+        if lang in {"json", "application/json", "taiji-json", ""}:
+            candidates.append(body)
+    candidates.append(text.strip())
+    if json_substring := _extract_json_substring(text):
+        candidates.append(json_substring)
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _coerce_file_edits(raw: Any) -> list[tuple[str, str]]:
+    if raw is None:
+        return []
+
+    payload: dict[str, Any]
+    if isinstance(raw, dict):
+        payload = raw
+    elif isinstance(raw, list):
+        payload = {"files": raw}
+    else:
+        raise RuntimeError(f"Codex response manifest must be a dict or list, got {type(raw).__name__}")
+
+    entries: list[Any]
+    if "files" in payload:
+        files_raw = payload["files"]
+        if isinstance(files_raw, dict):
+            entries = [{"path": key, "content": value} for key, value in files_raw.items()]
+        elif isinstance(files_raw, list):
+            entries = list(files_raw)
+        else:
+            raise RuntimeError("Codex response manifest files must be a list or mapping")
+    elif "edits" in payload and isinstance(payload["edits"], list):
+        entries = list(payload["edits"])
+    elif "path" in payload or "content" in payload:
+        entries = [payload]
+    else:
+        raise RuntimeError("Codex response manifest must contain files, edits, or a single path/content pair")
+
+    edits: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Codex response manifest entry {index} must be a dict")
+
+        path = entry.get("path") or entry.get("file") or entry.get("name")
+        content = entry.get("content")
+        if content is None:
+            content = entry.get("text") or entry.get("body")
+        if not isinstance(path, str) or not path.strip():
+            raise RuntimeError(f"Codex response manifest entry {index} must include a non-empty path")
+        if not isinstance(content, str):
+            raise RuntimeError(f"Codex response manifest entry {index} must include string content")
+
+        normalized = os.path.normcase(path.strip())
+        if normalized in seen:
+            raise RuntimeError(f"Codex response manifest repeated path {path!r}")
+        seen.add(normalized)
+        edits.append((path.strip(), content))
+
+    return edits
+
+
+def _extract_legacy_code_block(text: str) -> str | None:
     pattern = r"```python\s*\n(.*?)```"
     match = re.search(pattern, text, re.DOTALL)
     if match:
         return match.group(1).strip() + "\n"
-    # Fallback: try any ``` block
     pattern = r"```\s*\n(.*?)```"
     match = re.search(pattern, text, re.DOTALL)
     if match:
@@ -145,6 +265,78 @@ def _extract_code_block(text: str) -> str | None:
         if "def " in code:
             return code + "\n"
     return None
+
+
+def _apply_codex_file_edits(
+    *,
+    response_text: str,
+    editable_paths: list[Path],
+    cwd: Path,
+) -> list[Path]:
+    allowed = {_normalize_path_key(path) for path in editable_paths}
+    if not allowed:
+        return []
+
+    payload = _load_json_payload(response_text)
+    if payload is not None:
+        edits = _coerce_file_edits(payload)
+        if not edits:
+            return []
+
+        written: list[Path] = []
+        for raw_path, content in edits:
+            target = _resolve_edit_path(raw_path, cwd)
+            if _normalize_path_key(target) not in allowed:
+                allowed_list = ", ".join(sorted(str(path) for path in editable_paths))
+                raise RuntimeError(
+                    f"Codex response attempted to write disallowed file {raw_path!r}; "
+                    f"allowed files are: {allowed_list}"
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written.append(target)
+        return written
+
+    # Backward-compatible fallback: preserve the old single-file behavior when
+    # Codex returns a plain python block instead of a structured manifest.
+    if len(editable_paths) == 1:
+        code = _extract_legacy_code_block(response_text)
+        if code is not None:
+            editable_paths[0].parent.mkdir(parents=True, exist_ok=True)
+            editable_paths[0].write_text(code, encoding="utf-8")
+            return [editable_paths[0]]
+
+    return []
+
+
+def _codex_write_instruction(editable_paths: list[Path], cwd: Path) -> str:
+    if not editable_paths:
+        return ""
+
+    allowed = []
+    for path in editable_paths:
+        try:
+            allowed.append(path.resolve().relative_to(cwd.resolve()).as_posix())
+        except ValueError:
+            allowed.append(str(path.resolve()))
+    allowed_list = "\n".join(f"- {item}" for item in allowed)
+    return (
+        "\nIMPORTANT: Return a single JSON object inside one fenced ```json block.\n"
+        "Use this exact schema:\n"
+        "{\n"
+        '  "files": [\n'
+        '    {"path": "relative/or/absolute/path", "content": "full file text"},\n'
+        "    ...\n"
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        f"{allowed_list}\n"
+        "- Only include files from the allowlist above.\n"
+        "- Include every file you changed, with its full final content.\n"
+        "- If you changed nothing, return {\"files\": []}.\n"
+        "- Do not use shell commands to edit files.\n"
+        "- Keep any explanatory text outside the JSON block minimal.\n"
+    )
 
 
 async def run_codex_turn(
@@ -156,6 +348,7 @@ async def run_codex_turn(
     model: str | None = None,
     effort: str | None = "xhigh",
     sandbox: str = "read-only",
+    service_name: str = "taiji_yin",
 ) -> tuple[str | None, str]:
     """Run a single Codex turn. Returns (thread_id, response_text).
 
@@ -171,22 +364,14 @@ async def run_codex_turn(
             "model": model,
             "approvalPolicy": "never",
             "sandbox": sandbox,
-            "serviceName": "taiji_yin",
+            "serviceName": service_name,
             "ephemeral": True,
         })
         thread_id = thread_resp["thread"]["id"]
 
-        # System prompt + user prompt combined (codex has no separate system field)
-        # Codex sandbox file writes are unreliable, so we ask it to output the
-        # full file content in its response, then we write it ourselves.
-        primary_file = editable_paths[0] if editable_paths else None
-        write_instruction = ""
-        if primary_file:
-            write_instruction = (
-                f"\nIMPORTANT: Output the COMPLETE content of {primary_file.name} "
-                f"inside a fenced code block tagged ```python ... ```. "
-                f"The host will extract and write it. Do not use shell commands to edit files.\n\n"
-            )
+        # Codex sandbox file writes are unreliable, so we ask it to output a
+        # structured manifest of full file contents. The host applies the edits.
+        write_instruction = _codex_write_instruction(editable_paths, cwd)
         full_prompt = f"{system_prompt}\n\n{write_instruction}{prompt}" if system_prompt else f"{write_instruction}{prompt}"
 
         # Start turn and wait for completion
@@ -248,12 +433,14 @@ async def run_codex_turn(
 
         response_text = "\n".join(response_parts).strip()
 
-        # Extract python code block and write to primary editable file
-        if primary_file and response_text:
-            code = _extract_code_block(response_text)
-            if code:
-                primary_file.write_text(code, encoding="utf-8")
-                print(f"[codex] Wrote {len(code)} bytes to {primary_file.name}")
+        # Materialize every file Codex explicitly returned in the manifest.
+        written_paths = _apply_codex_file_edits(
+            response_text=response_text,
+            editable_paths=editable_paths,
+            cwd=cwd,
+        )
+        for path in written_paths:
+            print(f"[codex] Wrote {path.name}")
 
         return thread_id, response_text
     finally:

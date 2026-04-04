@@ -1,41 +1,27 @@
 # Goal
 
-Solve encoder drift in streaming world models.
+Derive a closed-form mechanism for encoder stability in a streaming world
+model with retained fast weights.
 
-A system that continuously learns and models the world needs five
-components: an encoder (observations → latent space), a predictor
-(latent → next latent), fast weights (online adaptation via prediction
-error), slow weights (long-term knowledge), and consolidation
-(fast → slow, like sleep).
+This unit is mechanism-first. The primary deliverable is not a PyTorch
+training run. The primary deliverable is:
 
-The killer problem is the encoder. Everything downstream — predictor,
-fast weights, consolidation — operates in the encoder's latent space.
-If the encoder updates, the latent space shifts. Every fast weight
-association becomes garbage. The system can't tell whether prediction
-error increased because the world changed or because the encoder drifted.
-It adapts fast weights to compensate, making it worse. Silent collapse.
+- `candidate.json`: the mechanism family and its structural commitments
+- `witness.json`: the parameter regime and bound inputs
+- `derivation.md`: the analytic argument that the inequalities hold
+- `implementation.py`: an optional compiled reference implementation
 
-This is a coupled optimization with no guaranteed stable fixed point:
-learning a representation and predicting in that representation
-simultaneously, on a non-stationary stream.
+The host evaluates the mechanism mechanically from the candidate and
+witness. The target world is a rotating-Gaussian stream with fixed seed,
+fixed latent dimension, and explicit drift/carryover inequalities.
 
-Existing partial attacks:
-- EMA target encoder (BYOL 2020, I-JEPA 2023) — stable targets via
-  exponential moving average. Works for batch training, not streaming.
-- Stop-gradient (SimSiam 2021) — prevents collapse but freezes one side.
-- VICReg (Bardes 2022) — variance/invariance/covariance regularization.
+The core question is:
 
-None of these have been demonstrated with fast weight adaptation on
-non-stationary streams. The problem is open.
+Can a two-timescale encoder plus carried-over fast weights keep encoder
+drift inside a nontrivial cosine band while still preserving cross-shift
+adaptation?
 
-Search the literature deeply. Use WebSearch and WebFetch. Look for
-foundational work — not just recent ML papers. The ideas that matter
-may come from control theory, dynamical systems, information geometry,
-or neuroscience from the 1950s-1990s. Schmidhuber, Grossberg, Kohonen,
-Hopfield, Hebb — the people who thought about these problems before
-compute made it easy to ignore them.
-
-The deliverable is a theoretically sound mechanism for encoder stability
-under non-stationary streaming input, compatible with fast weight
-adaptation. Derive it. Prove it doesn't collapse. Implement a small
-proof of concept.
+The law should be satisfied by derivation, not by black-box empirical
+search. Use the candidate, witness, and derivation artifacts to state the
+mechanism, solve the inequalities, and only then compile a reference
+implementation if helpful.

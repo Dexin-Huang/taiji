@@ -74,12 +74,16 @@ pip install -e .
 # Create a unit -- this is your research problem
 python -m taiji.cycle new my_unit --goal "Build a self-improving model."
 
+# Or create a mechanism-search unit with structured candidate artifacts
+python -m taiji.cycle new my_mechanism --problem-kind mechanism_search --goal "Derive a mechanism with a checkable witness."
+
 # Seed the law (yin writes world() and passes())
 python -m taiji.cycle seed --unit-root units/my_unit --new
 
 # Run the loop (needs Claude Agent SDK)
 pip install -e ".[agent]"
 python -m taiji.loop --unit-root units/my_unit --new --iterations -1
+python -m taiji.loop --unit-root units/my_mechanism --new --yang-backend codex
 ```
 
 The loop runs until yang passes and yin has nothing left to tighten. Or until you stop it.
@@ -97,8 +101,8 @@ taiji/
     agents.py         Claude Agent SDK turn execution, edit hooks
     loop.py           Main loop orchestrator, CLI
     watch.py          Supervisor process (restart on crash)
-  prompts/yin_yang/   Shared prompt templates
-  units/              Experiment definitions (yin.py, yang.py, prompt.md)
+  prompts/*/          Shared prompt templates by problem family
+  units/              Experiment definitions (prompt.md plus family-specific artifacts)
   runs/               Generated run artifacts (gitignored)
 ```
 
@@ -110,6 +114,8 @@ Each run materializes under `runs/<unit>/<run_id>/`:
 | File | Purpose |
 |------|---------|
 | `yang.py`, `yin.py` | Live working copies (unit seeds stay untouched) |
+| `candidate.json`, `witness.json`, `derivation.md` | Mechanism-search candidate artifacts when the unit uses that family |
+| `problem_spec.md`, `counterexamples.md` | Yin-side mechanism-search notes and loophole records |
 | `world.json` | Materialized world from `yin.world()` |
 | `law.md` | Frozen law snapshot with source and world |
 | `results.json` | Latest yang submission |
@@ -142,7 +148,7 @@ python -m taiji.watch --unit-root units/my_unit --new
 <details>
 <summary><strong>Prompt overrides</strong></summary>
 
-Units use the shared prompt set in `prompts/yin_yang/` by default. Override any template by placing these in your unit directory:
+Units use a shared prompt set based on `prompt_set` in `unit.toml` (`yin_yang` or `mechanism_search` by default). Override any template by placing these in your unit directory:
 
 - `yang_prompt.override.md`
 - `yin_prompt.override.md`
@@ -154,9 +160,9 @@ Units use the shared prompt set in `prompts/yin_yang/` by default. Override any 
 
 ## What the runtime enforces
 
-Yang can only edit `yang.py`. Yin can only edit `yin.py`. Edit hooks enforce this -- no exceptions. If yang writes a brilliant solution that also tweaks yin's acceptance criteria, the edit gets rejected.
+Yang can only edit its owned artifacts (`yang.py` for program search, or `implementation.py` plus structured mechanism artifacts for `mechanism_search`). Yin can only edit its owned law-side artifacts. Edit hooks enforce this -- no exceptions. If Yang writes a brilliant solution that also tweaks Yin's acceptance criteria, the edit gets rejected.
 
-Yang is selected harshly. A new `yang.py` is kept only when it beats the current best under the frozen law. Otherwise the turn is thrown out and the previous working copy is restored. Most yang turns get discarded.
+Yang is selected harshly. A new candidate is kept only when it beats the current best under the frozen law. Otherwise the turn is thrown out and the previous working copy is restored. Most Yang turns get discarded.
 
 Yin's changes are validated for determinism -- `world()` must return the same dict on two consecutive imports. If it doesn't, the change is reverted. No randomness in the law.
 
