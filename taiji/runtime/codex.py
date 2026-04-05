@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 import re
 from pathlib import Path
 from typing import Any
@@ -28,40 +30,50 @@ CAPABILITIES = {
     ],
 }
 
+TURN_COMPLETION_TIMEOUT_SEC = 300.0
+
 
 class CodexAppServer:
     """Minimal JSON-RPC client for the codex app-server binary."""
 
-    def __init__(self, proc: asyncio.subprocess.Process):
+    def __init__(self, proc: subprocess.Popen[bytes]):
         self._proc = proc
         self._next_id = 1
         self._pending: dict[int, asyncio.Future] = {}
         self._notifications: list[dict] = []
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
         self._closed = False
+        self._stderr_chunks: list[str] = []
 
     @classmethod
-    async def connect(cls, cwd: str | Path) -> "CodexAppServer":
+    async def connect(cls, cwd: str | Path, *, service_name: str = "taiji") -> "CodexAppServer":
         codex_bin = shutil.which("codex")
         if codex_bin is None:
             raise RuntimeError(
                 "codex CLI not found. Install with: npm install -g @openai/codex"
             )
-        proc = await asyncio.create_subprocess_exec(
-            codex_bin, "app-server",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        proc = subprocess.Popen(
+            [codex_bin, "app-server"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=str(cwd),
+            env=_codex_process_env(Path(cwd), service_name=service_name),
         )
         client = cls(proc)
         client._reader_task = asyncio.create_task(client._read_loop())
-        # Handshake
-        await client.request("initialize", {
-            "clientInfo": CLIENT_INFO,
-            "capabilities": CAPABILITIES,
-        })
-        client.notify("initialized", {})
+        client._stderr_task = asyncio.create_task(client._stderr_loop())
+        try:
+            # Handshake
+            await client.request("initialize", {
+                "clientInfo": CLIENT_INFO,
+                "capabilities": CAPABILITIES,
+            })
+            client.notify("initialized", {})
+        except Exception:
+            await client.close()
+            raise
         return client
 
     def notify(self, method: str, params: dict) -> None:
@@ -77,11 +89,23 @@ class CodexAppServer:
 
     def _send(self, msg: dict) -> None:
         line = json.dumps(msg) + "\n"
+        if self._proc.stdin is None:
+            raise RuntimeError("Codex app-server stdin is unavailable")
         self._proc.stdin.write(line.encode())
+        self._proc.stdin.flush()
+
+    def _fail_pending(self, message: str) -> None:
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(RuntimeError(message))
+        self._pending.clear()
 
     async def _read_loop(self) -> None:
+        if self._proc.stdout is None:
+            self._fail_pending("Codex app-server stdout is unavailable")
+            return
         while True:
-            raw = await self._proc.stdout.readline()
+            raw = await asyncio.to_thread(self._proc.stdout.readline)
             if not raw:
                 break
             line = raw.decode().strip()
@@ -107,20 +131,54 @@ class CodexAppServer:
                 self._notifications.append(msg)
                 continue
 
+        if not self._closed:
+            self._fail_pending(self._exit_message())
+
+    async def _stderr_loop(self) -> None:
+        if self._proc.stderr is None:
+            return
+        while True:
+            raw = await asyncio.to_thread(self._proc.stderr.readline)
+            if not raw:
+                break
+            text = raw.decode(errors="replace")
+            if text:
+                self._stderr_chunks.append(text)
+
+    def _exit_message(self) -> str:
+        returncode = self._proc.poll()
+        stderr_text = "".join(self._stderr_chunks).strip()
+        if stderr_text:
+            return f"Codex app-server exited with code {returncode}: {stderr_text}"
+        return f"Codex app-server exited with code {returncode}"
+
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        if self._proc.stdin:
+        if self._proc.stdin is not None:
             self._proc.stdin.close()
         try:
             self._proc.terminate()
         except ProcessLookupError:
             pass
+        try:
+            await asyncio.to_thread(self._proc.wait, 5)
+        except Exception:
+            try:
+                self._proc.kill()
+            except ProcessLookupError:
+                pass
         if self._reader_task:
             self._reader_task.cancel()
             try:
                 await self._reader_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if self._stderr_task:
+            self._stderr_task.cancel()
+            try:
+                await self._stderr_task
             except (asyncio.CancelledError, Exception):
                 pass
 
@@ -128,6 +186,37 @@ class CodexAppServer:
         out = list(self._notifications)
         self._notifications.clear()
         return out
+
+
+def _codex_source_home() -> Path:
+    raw = os.environ.get("CODEX_HOME")
+    if raw:
+        return Path(raw)
+    return Path.home() / ".codex"
+
+
+def _safe_service_name(service_name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(service_name).strip())
+    return cleaned or "taiji"
+
+
+def _prepare_codex_home(cwd: Path, *, service_name: str) -> Path:
+    source_home = _codex_source_home()
+    cwd_scope = hashlib.sha256(str(cwd.resolve()).encode("utf-8")).hexdigest()[:10]
+    target_home = Path(tempfile.gettempdir()) / "taiji-codex-home" / cwd_scope / _safe_service_name(service_name)
+    target_home.mkdir(parents=True, exist_ok=True)
+    for name in ("auth.json", "config.toml", "version.json"):
+        source_path = source_home / name
+        target_path = target_home / name
+        if source_path.exists():
+            target_path.write_bytes(source_path.read_bytes())
+    return target_home
+
+
+def _codex_process_env(cwd: Path, *, service_name: str) -> dict[str, str]:
+    env = dict(os.environ)
+    env["CODEX_HOME"] = str(_prepare_codex_home(cwd, service_name=service_name))
+    return env
 
 
 def _normalize_path_key(path: Path) -> str:
@@ -267,6 +356,22 @@ def _extract_legacy_code_block(text: str) -> str | None:
     return None
 
 
+def _item_text(item: dict[str, Any]) -> str:
+    text = item.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+    content = item.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for entry in content:
+            if isinstance(entry, dict) and entry.get("type") == "text":
+                value = entry.get("text")
+                if isinstance(value, str) and value:
+                    parts.append(value)
+        return "\n".join(parts).strip()
+    return ""
+
+
 def _apply_codex_file_edits(
     *,
     response_text: str,
@@ -352,11 +457,12 @@ async def run_codex_turn(
 ) -> tuple[str | None, str]:
     """Run a single Codex turn. Returns (thread_id, response_text).
 
-    The codex agent gets workspace-write access and can edit files directly.
-    We prepend the system_prompt to the user prompt since codex app-server
-    doesn't have a separate system_prompt field.
+    Codex returns a manifest of file contents for allowlisted paths and the
+    host applies those edits mechanically. We prepend the system prompt to the
+    user prompt since codex app-server doesn't have a separate system prompt
+    field.
     """
-    client = await CodexAppServer.connect(cwd)
+    client = await CodexAppServer.connect(cwd, service_name=service_name)
     try:
         # Start thread
         thread_resp = await client.request("thread/start", {
@@ -374,23 +480,29 @@ async def run_codex_turn(
         write_instruction = _codex_write_instruction(editable_paths, cwd)
         full_prompt = f"{system_prompt}\n\n{write_instruction}{prompt}" if system_prompt else f"{write_instruction}{prompt}"
 
-        # Start turn and wait for completion
-        turn_future = asyncio.ensure_future(
-            client.request("turn/start", {
-                "threadId": thread_id,
-                "input": [{"type": "text", "text": full_prompt, "text_elements": []}],
-                "model": model,
-                "effort": effort,
-                "outputSchema": None,
-            })
-        )
+        # Start turn and then poll notifications until the turn completes.
+        turn_resp = await client.request("turn/start", {
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": full_prompt, "text_elements": []}],
+            "model": model,
+            "effort": effort,
+            "outputSchema": None,
+        })
+        turn_id = str(turn_resp.get("turn", {}).get("id", "")).strip()
 
         # Poll notifications until turn/completed
         response_parts = []
         completed = False
+        deadline = asyncio.get_running_loop().time() + TURN_COMPLETION_TIMEOUT_SEC
         print("[codex] Waiting for turn completion...")
         while not completed:
             await asyncio.sleep(0.5)
+            if client._proc.poll() is not None:
+                raise RuntimeError(client._exit_message())
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(
+                    f"Codex turn timed out after {TURN_COMPLETION_TIMEOUT_SEC:.0f}s waiting for turn/completed"
+                )
             for notif in client.drain_notifications():
                 method = notif.get("method", "")
                 params = notif.get("params", {})
@@ -400,7 +512,7 @@ async def run_codex_turn(
                     itype = item.get("type", "")
                     print(f"[codex] item/completed: {itype}")
                     if itype == "agentMessage":
-                        text = item.get("text", "")
+                        text = _item_text(item)
                         if text:
                             response_parts.append(text)
                             print(f"[codex]   text: {text[:200]}")
@@ -408,28 +520,15 @@ async def run_codex_turn(
                         cmd = item.get("command", "")
                         print(f"[codex]   cmd: {cmd[:200]}")
 
-                if method == "turn/completed":
+                if method == "turn/completed" and (not turn_id or params.get("turnId") == turn_id):
                     print(f"[codex] Turn completed. Response parts: {len(response_parts)}")
                     completed = True
                     break
-
-            # Check if turn request errored
-            if turn_future.done() and not completed:
-                exc = turn_future.exception()
-                if exc:
-                    raise exc
-                # Give a final drain chance
-                await asyncio.sleep(2)
-                for notif in client.drain_notifications():
-                    if notif.get("method") == "item/completed":
-                        item = notif.get("params", {}).get("item", {})
-                        if item.get("type") == "agentMessage":
-                            text = item.get("text", "")
-                            if text:
-                                response_parts.append(text)
-                    if notif.get("method") == "turn/completed":
-                        completed = True
-                break
+                if method == "turn/failed" and (not turn_id or params.get("turnId") == turn_id):
+                    raise RuntimeError(f"Codex turn failed: {json.dumps(params)}")
+                if method == "error" and not bool(params.get("willRetry")):
+                    error = params.get("error", {})
+                    raise RuntimeError(f"Codex transport error: {error.get('message', 'unknown error')}")
 
         response_text = "\n".join(response_parts).strip()
 
@@ -453,9 +552,10 @@ def codex_available() -> bool:
     if codex_bin is None:
         return False
     try:
+        env = _codex_process_env(Path.cwd(), service_name="availability")
         result = subprocess.run(
             [codex_bin, "login", "status"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, env=env,
         )
         return result.returncode == 0
     except Exception:

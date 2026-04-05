@@ -36,7 +36,9 @@ Search for the smallest mechanism family that can satisfy the constraints simult
 
 Write the candidate mechanism into {candidate_file}, the supporting bounds into {witness_file}, and the derivation into {derivation_file}. Keep the derivation compact and checkable.
 
-You may use WebSearch, WebFetch, Bash, Task, and Codex when useful. Search the literature for relevant prior work. If you need prior run memory, use Task with the `run_librarian` agent for one concrete retrieval question.
+You may use WebSearch, WebFetch, Bash, and Task when useful. Search the literature for relevant prior work.
+You may consult Codex (GPT-5.4) via /codex:rescue when you want a second derivation or algebra check, or when you want a bounded patch proposal after you have already decided the next mechanism step. Keep ownership of {candidate_file}, {witness_file}, {derivation_file}, and {implementation_file} at the Claude level: Codex is a bounded specialist, not the top-level actor. Claude remains primary for planning, law interpretation, and run_cycle usage.
+If you need prior run memory, use Task with the `run_librarian` agent for one concrete retrieval question.
 The host evaluates {candidate_file}, {witness_file}, and {derivation_file} mechanically. Treat {implementation_file} as an optional compiled reference implementation, not as the primary search surface.
 
 Do not reason at length in the assistant response. Keep the response to at most 3 short lines. Put any longer scratch work in {yang_scratchpad}.

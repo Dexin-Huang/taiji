@@ -10,6 +10,9 @@ runs/**
 references/
 notes/
 tmp_taiji/
+.tmp-codex-home*/
+.tmp-taiji-smoke/
 .claude/
 CLAUDE.md
 AGENTS.md
+taiji_core_logic_review.zip
